@@ -1,64 +1,150 @@
+<div align="center">
+
 # moread
 
-A local-first native macOS EPUB reader, built with Swift and AppKit. Requires macOS 14 or later. The packaged build targets Apple Silicon.
+**A quiet place for your books. Anywhere on your Mac.**
 
-## Build and verify
+A native, local-first EPUB reader with a full reading view and a tiny, transparent window that keeps only the words you need.
+
+[![macOS](https://img.shields.io/badge/macOS-14%2B-black)](#requirements)
+[![Swift](https://img.shields.io/badge/Swift-6-orange)](#build-from-source)
+[![License: MIT](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
+[![macOS tests](https://github.com/Mudsuen/moread/actions/workflows/test.yml/badge.svg)](https://github.com/Mudsuen/moread/actions/workflows/test.yml)
+
+</div>
+
+## Reading, without the extra chrome
+
+moread is built for people who switch between focused reading and keeping a few lines beside their work. Open a local EPUB, pick a chapter, and read in a conventional window—or shrink it into a borderless, always-on-top reader.
+
+The interface is native Swift and AppKit, with a restrained grayscale palette. Books and reading positions stay on your Mac. There are no accounts, subscriptions, analytics, or third-party runtime dependencies.
+
+## Features
+
+| | What you can do |
+| --- | --- |
+| **Two reading windows** | Switch between a library-backed reader and a compact, draggable, resizable window. |
+| **Text-only transparency** | Adjust background and text opacity separately. Remove the background completely while keeping the words visible. |
+| **Adaptive text color** | Optionally choose dark or light text from the actual background beneath each visible glyph, including mixed backgrounds. |
+| **Pages or continuous scrolling** | Use contiguous text pages without repeated content, or scroll within a chapter. |
+| **Independent typography** | Keep separate font size, typeface, line height, and paragraph spacing for each window mode. Preview Songti, system, Kaiti, and monospaced fonts. |
+| **Light, dark, or system appearance** | Set the theme independently of app-local brightness. |
+| **Unobtrusive controls** | Hover to reveal small, borderless contents, typography, and pin controls just above the first line. Move away to hide them. |
+| **Quick concealment** | Double-click the small window to visually hide or restore it. Hold both horizontal arrow keys to toggle window visibility. |
+| **Local reading history** | Automatically save the selected book, chapter, source-text position, preferences, and window geometry. |
+| **Searchable contents** | Browse EPUB chapter titles without leaving the compact reader. |
+
+Resizing retains the current page's first source character. Visual concealment preserves your opacity settings and reading position. Opening moread from the Dock or menu bar brings the reader forward with brief location feedback.
+
+## Requirements
+
+- macOS 14 or later.
+- Xcode 16 or later, or a compatible Swift 6 toolchain, for building from source.
+- An unencrypted EPUB file or an unpacked EPUB directory.
+- Optional macOS screen-recording permission for adaptive text contrast.
+
+The current interface is primarily in Chinese. Apple Silicon has been tested; Intel compatibility has not been verified. This repository currently distributes source code. It does not provide a notarized public installer.
+
+## Build from source
+
+```sh
+git clone https://github.com/Mudsuen/moread.git
+cd moread
+swift build
+swift run MudsReader
+```
+
+The package and executable retain the original internal name `MudsReader`; the application is named **moread**.
+
+To create a signed application bundle:
+
+```sh
+./scripts/package.sh
+open build/moread.app
+```
+
+Packaging requires a valid Apple Development signing identity in your Keychain. The script selects an available identity; set `CODE_SIGN_IDENTITY` explicitly if you have more than one. No certificate or private key is included in this repository.
+
+Use the same identity for subsequent builds if you enable screen capture. Ad-hoc signatures bind permissions to a changing code hash and are intentionally rejected by the packaging script. A locally signed development build is not the same as a notarized distribution build.
+
+## Get started
+
+1. Choose **File → Import EPUB** (`文件 → 导入 EPUB`), or use the Apple Books import entry to locate an accessible local book.
+2. Select a chapter and start reading. Paged mode is the default.
+3. Press **⌘⇧M** for the small window. Drag the text area to move it and drag an edge to resize it.
+4. Open **⌘,** to customize typography, theme, brightness, and transparency.
+5. Enable automatic text color only if you want the reader to adapt to the windows or desktop underneath it. macOS will require screen-recording access.
+
+Apple Books import is a local file import, not a connection to your Apple account or its reading-history service. Protected or unavailable cloud-only books cannot be imported as readable EPUBs.
+
+## Keyboard and mouse
+
+| Action | Shortcut |
+| --- | --- |
+| Previous / next page | ← or ↑ / → or ↓ |
+| Next / previous page | Space / ⇧Space |
+| Previous / next chapter | ⌘[ / ⌘] |
+| Search chapter titles | ⌘F |
+| Typography and appearance | ⌘, |
+| Increase / decrease font size | ⌘+ or ⌘= / ⌘− |
+| Normal / compact window | ⌘⇧M |
+| Paged / scrolling mode | ⌘⇧P |
+| Increase / decrease app brightness | ⌥⌘↑ / ⌥⌘↓ |
+| Increase / decrease background transparency | ⌥⌘→ / ⌥⌘← |
+| Hide the reader | Esc or ⌘W |
+| Toggle window visibility | Hold ← and → together; release both before repeating |
+| Visually conceal / restore compact content | Double-click the compact window |
+| Show the reader | Click its Dock icon or left-click the menu bar book icon |
+| Menu bar actions | Right-click the menu bar book icon |
+
+Most shortcuts apply while moread has focus. The two-arrow visibility chord checks current key state while the app is running; its state machine is tested, but physical-keyboard behavior across other apps still needs broader validation. Within moread, a single horizontal arrow is briefly deferred to distinguish it from the chord.
+
+## Privacy and local data
+
+Imported books are copied into:
+
+```text
+~/Library/Application Support/MudsReader/Books/
+```
+
+The sibling `library.json` stores the library, per-book chapter and UTF-16 text offset, and reading preferences. Saves are atomic. Window geometry is stored in macOS application preferences. The legacy directory and bundle identifier (`com.muds.reader`) are preserved for upgrade compatibility.
+
+Original EPUBs and the Apple Books database are never edited. There is no cloud sync or content upload.
+
+**Adaptive contrast is optional.** ScreenCaptureKit requests only the reader's region on its current display and excludes moread itself. Captured pixels remain in memory: they are not recorded, saved, or uploaded, and audio is not requested. Sampling stops when adaptation is disabled, the background is opaque, normal mode is active, or the reader is hidden.
+
+Local background medians and a small switching threshold reduce incorrect colors and flicker. Old-position captures are discarded after window movement, and temporary capture failures retain the last valid colors. Highly detailed or rapidly changing backgrounds can still reduce readability; an opaque background remains available in settings.
+
+## Scope and limitations
+
+moread renders EPUB **text**, rather than reproducing publisher page layouts. It currently does not support PDF, DRM-protected books, image-heavy layouts, annotations, bookmarks, iCloud reading-position sync, or iOS. Progress is chapter-weighted rather than an exact whole-book page count. Continuous scrolling is scoped to the current chapter.
+
+This is an actively developed personal reading tool. Contributions and reproducible bug reports are welcome; compatibility and accessibility across different hardware and macOS configurations need continued testing.
+
+## Development and verification
 
 ```sh
 swift test
-./scripts/package.sh
-.build/debug/MudsReader --verify-book /path/to/unpacked.epub
+swift build -c release
 ```
 
-The package script creates `build/moread.app`, signed with an existing Apple Development certificate. Set `CODE_SIGN_IDENTITY` to select a certificate explicitly. Ad-hoc signing is rejected because it binds the screen-capture grant to a changing code hash. The bundle identifier `com.muds.reader` and existing data directory remain unchanged across the rename. Open `Package.swift` in Xcode to develop. No third-party runtime dependencies or network services are used. Optional automatic text contrast uses Apple ScreenCaptureKit and requires macOS screen-recording permission.
+Tests cover EPUB parsing and chapter order, import safety, preference migration, state persistence, pagination, source-position preservation, resizing, transparency, adaptive contrast, hover controls, and shortcut state transitions.
 
-## Reading
+One optional integration test uses a book supplied by the developer and is skipped by default:
 
-- Import zipped EPUBs or Apple Books' unpacked EPUB directories through File > Import EPUB or File > Import from Apple Books.
-- The native sidebar provides a book selector and searchable chapter list in EPUB spine order. EPUB 2 NCX and EPUB 3 navigation labels are supported.
-- Command-Shift-M switches between the normal reader and a borderless, resizable, text-only window. Drag the text to move the small window; drag an edge to resize it.
-- Left/Up/Page Up go to the previous page; Right/Down/Page Down/Space go to the next page. Shift-Space also goes back. At a chapter boundary, page commands move into the adjacent chapter.
-- Paged reading is the default, including migration from earlier versions. Pages use contiguous TextKit source ranges: no repeated lines, missing characters, or backfilling on short final pages. Arrow keys and wheel gestures turn pages. The scrolling mode keeps continuous mouse/trackpad scrolling within each chapter; Command-Shift-P or the toolbar icon switches modes.
-- Command-[ and Command-] change chapters. Command-F searches chapter titles.
-- Command-plus (or Command-equals) increases the active mode's font size by 1 point; Command-minus decreases it. Normal reading supports 14–32 points, stealth reading 8–20 points. The current text anchor is retained.
-- Command-comma opens typography settings. Each reading mode has independent font size, typeface, line height and paragraph spacing. Normal mode additionally offers page margins. Light, dark and system themes cover the main UI.
-- Appearance (system/light/dark) is independent from app-local brightness. Brightness dims the app content without changing macOS display settings or implicitly switching theme. Command-Option-Up/Down changes brightness in 5% steps.
-- Background and text transparency are independent. Background transparency reaches 100% while text remains visible; Command-Option-Right increases background transparency by 5%, and Command-Option-Left decreases it. Those transparency shortcuts apply to the small window.
-- Double-click the small reading window to visually hide its content; double-click again to restore it. This is temporary and does not change opacity settings or the reading position. Sampling and page-turn commands pause while visually hidden. The Dock/menu-bar reveal action also restores it.
-- The small window supports always-on-top. Hover reveals three borderless, transparent circular buttons immediately outside the upper-left corner: contents, typography, and pinning. Each button diameter is 1.5 times the reading font size; the visible symbols sit about 2 points above the first visible text line, using the transparent top margin instead of adding its padding to the gap, and hides on pointer exit with a short gap-crossing grace period. The contents button (or Command-F) opens a searchable chapter panel without leaving stealth mode. A dedicated hit surface covers text, paragraph gaps, margins and the empty end of a page. Resize zones are 9 points along edges and 16 points at corners, with directional system frame-resize cursors on macOS 15+. Resizing keeps the exact current first source character; pagination splits at that anchor so preceding text is never pulled into the current page. The opposite edge stays fixed and minimum dimensions are enforced. At full transparency, the window uses a near-invisible hit surface only while hovered; it is fully clear at rest.
-- The compact settings panel uses icon shortcuts for appearance, pagination and window mode, plus short Typography / Appearance / Small Window tabs, a neutral grayscale palette and a translucent pin glyph without a backplate. Font choices include rendered Chinese previews for Songti, system, Kaiti and monospaced faces. The main reader has a centered header and a collapsible library sidebar.
-- Escape or Command-W hides the reader. A left click on the menu bar book icon or a Dock reopen brings the reader forward and briefly outlines it for location feedback; right click on the menu bar icon opens its menu. Holding Left and Right together toggles reader visibility through current key-state polling. Release both before triggering again. The reader briefly defers a single arrow to recognize the chord without turning a page. Native automation cannot synthesize this two-nonmodifier-key chord; physical keyboard verification remains outstanding. Command-Shift-M is an application shortcut, not a global shortcut.
+```sh
+MUDSREADER_TEST_EPUB=/path/to/your/book.epub swift test
+```
 
-## Storage and privacy
+Do not commit copyrighted books, personal reading records, screenshots containing private content, or signing material. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.
 
-Imported books are copied to `~/Library/Application Support/MudsReader/Books/`. Original files and the Apple Books database are never edited. `library.json` stores the library, per-book chapter and UTF-16 text offset, and appearance preferences. Writes are atomic and scrolling saves after a short debounce. Window geometry and the selected mode use app preferences. Borderless-window restoration uses the forced-frame API so custom-resizable windows restore their saved dimensions as well as position.
+| Directory | Responsibility |
+| --- | --- |
+| `Sources/ReaderCore` | EPUB import, book models, persistence, preferences, and contrast math |
+| `Sources/MudsReader` | Native windows, text layout, reader controls, and screen sampling |
+| `Tests` | Core and AppKit regression tests |
+| `scripts` | Application icon generation and local signed packaging |
 
-The reader renders text, not the original EPUB page design. Illustrations, publisher styles, PDF, annotations, DRM-protected books, and cloud sync are outside the current scope. No copyrighted test book is included in the source or application bundle.
+## License
 
-## Adaptive text contrast
-
-When enabled and the translucent small window is visible, ScreenCaptureKit samples the region underneath it at up to five snapshots per second. The capture filter excludes this app, preventing feedback from the reader's own text. Only the window region on its current display is requested; pixels stay in memory and are neither saved nor uploaded. Audio is never requested. Sampling stops when the reader is hidden or visually hidden, normal mode is active, the background is opaque, or adaptive text is disabled.
-
-Each visible glyph uses the median luminance of its background neighborhood, combined with background opacity, app brightness and text opacity. This prevents blank margins or isolated bright pixels from changing the entire page, and supports separate dark/light text over mixed backgrounds. A small contrast hysteresis reduces flicker near the crossover without delaying clear white/black changes. Capture continues in common run-loop modes during interaction; results from old window positions are discarded and resampled immediately. Invalid transparent images are rejected. Transient capture failures retain the last valid colors instead of resetting to the theme; missing permission or stopping adaptation restores theme colors. Failures remain visible in settings. The permission button invokes macOS's normal screen-access flow; it does not bypass TCC.
-
-The appearance migration resets the legacy background-gray slider to full brightness because the control now represents app exposure. Existing theme, font choices, book positions and background opacity remain intact. Text opacity defaults to fully visible.
-
-## Verification
-
-Automated tests cover spine/TOC order, Chinese text extraction, malformed XHTML recovery, zip/directory imports, path traversal and symlink rejection, failed-import cleanup, preference migration, atomic state round trips, native page movement, reflow, margins the text-only view structure, disjoint/lossless pagination, short final pages, height reflow, appearance migration, independent transparency, pixel luminance, contrast choice, full-window hit testing, body-click versus drag discrimination, external toolbar geometry, hover exit timing, and toolbar action routing.
-
-The owner's local Apple Books copy of 剑来 was used for full-book parsing: 1,248 spine entries, 1,247 nonempty text sections, and 13,042,720 Swift characters. Thirty-two automated tests pass. Native UI checks cover chapter selection, normal/stealth switching, arrow paging, scrolling, typography, independent brightness and transparency, compact settings, installed-app launch, and pin toggling, brief reveal feedback, and a live edge resize that preserved the first source character and saved position. After restart, the selected book, chapter, UTF-16 source offset and all preferences matched exactly. A separate native white/black fixture confirmed real ScreenCaptureKit-driven switching to dark/light text after the user granted permission. Reading progress is represented by chapter and source text position, with line-level rounding on reflow; the displayed whole-book percentage is chapter-weighted.
-
-## Design direction
-
-The main window retains native window controls, sidebar navigation and keyboard access. The small window intentionally removes all visible controls while keeping recovery through the menu bar and a separate settings panel. The layout was compared directly with the local Apple Books reading window and Customize Theme panel. Native window guidance: https://developer.apple.com/design/human-interface-guidelines/windows
-
-Capture filtering: https://developer.apple.com/documentation/screencapturekit/sccontentfilter/init(display:excludingapplications:exceptingwindows:)
-
-## Signing regression
-
-The 1.1 packages used ad-hoc signing. Their designated requirement contained a cdhash, so subsequent builds no longer matched the existing TCC screen-recording grant even when System Settings still showed the toggle enabled. Version 1.2 uses certificate-based identity. Two signed packages with different code-directory hashes are checked to have the same designated requirement. The one-time migration requires refreshing the existing screen-capture grant through System Settings; no TCC database changes or permission bypasses are used.
-
-The certificate migration was verified on the installed app: after replacing the stale entry through System Settings, white/black fixture backgrounds produced dark/light text. Updating from bundle build 4 to build 5 (different CDHashes, identical certificate-based designated requirement) retained capture permission without another grant. The selected book, reading positions, preferences and 213 x 79 window size matched after the update. Native double-click verification hid all reading content and pin visuals, then restored the same text and pin state on the second double-click.
-
-Version 1.3.1 also verifies top/bottom capture coordinates, local glyph contrast across page turns, transparent-image rejection, brightness/opacity crossover behavior, and preservation of valid contrast after a temporary capture failure. The installed build was checked against native white, black and left/right split fixtures.
+[MIT](LICENSE). The license covers this project's code and original assets, not books imported into the application.
