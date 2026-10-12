@@ -116,20 +116,19 @@ final class ReaderUITests: XCTestCase {
         XCTAssertEqual(color.alphaComponent,0.4); XCTAssertGreaterThan(color.usingColorSpace(.genericGray)!.whiteComponent,0.9)
         XCTAssertEqual(view.layer!.backgroundColor!.alpha,0)
     }
-    func testSmallWindowHitCoverageAndCenterClick() {
+    func testReadingBodySingleClickHasNoControlAction() {
         _ = NSApplication.shared
         let view = StealthInteraction(frame:NSRect(x:0,y:0,width:360,height:150))
         XCTAssertTrue(view.hitTest(NSPoint(x:2,y:2)) === view)
         XCTAssertTrue(view.hitTest(NSPoint(x:355,y:145)) === view)
-        var toggles = 0; view.togglePinned = { toggles += 1 }
+        var toggles = 0; view.toggleVisualVisibility = { toggles += 1 }
         func event(_ type:NSEvent.EventType,_ point:NSPoint) -> NSEvent { NSEvent.mouseEvent(with:type,location:point,modifierFlags:[],timestamp:0,windowNumber:0,context:nil,eventNumber:0,clickCount:1,pressure:1)! }
         view.mouseDown(with:event(.leftMouseDown,NSPoint(x:180,y:75))); view.mouseUp(with:event(.leftMouseUp,NSPoint(x:180,y:75)))
-        RunLoop.current.run(until:Date().addingTimeInterval(NSEvent.doubleClickInterval+0.1))
-        XCTAssertEqual(toggles,1)
+        XCTAssertEqual(toggles,0)
         view.mouseDown(with:event(.leftMouseDown,NSPoint(x:2,y:2))); view.mouseUp(with:event(.leftMouseUp,NSPoint(x:2,y:2)))
-        XCTAssertEqual(toggles,1)
+        XCTAssertEqual(toggles,0)
         view.mouseDown(with:event(.leftMouseDown,NSPoint(x:170,y:75))); view.mouseUp(with:event(.leftMouseUp,NSPoint(x:180,y:75)))
-        XCTAssertEqual(toggles,1,"Movement must not toggle pin")
+        XCTAssertEqual(toggles,0,"Movement must not toggle visual visibility")
     }
     func testCapturePixelLuminance() {
         for (white,expected) in [(0.0,0.0),(1.0,1.0)] {
@@ -139,12 +138,12 @@ final class ReaderUITests: XCTestCase {
         }
     }
 
-    func testDraggingEmptyMarginMovesWindowWithoutPinToggle() {
+    func testDraggingEmptyMarginMovesWindowWithoutVisibilityToggle() {
         _ = NSApplication.shared
         let window = StealthWindow(contentRect:NSRect(x:100,y:100,width:360,height:150),styleMask:[.borderless],backing:.buffered,defer:false)
         window.isReleasedWhenClosed = false
         let view = StealthInteraction(frame:NSRect(x:0,y:0,width:360,height:150)); window.contentView = view
-        var toggles = 0; view.togglePinned = { toggles += 1 }
+        var toggles = 0; view.toggleVisualVisibility = { toggles += 1 }
         func event(_ type:NSEvent.EventType,_ point:NSPoint) -> NSEvent { NSEvent.mouseEvent(with:type,location:point,modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,eventNumber:0,clickCount:1,pressure:1)! }
         let origin = window.frame.origin
         view.mouseDown(with:event(.leftMouseDown,NSPoint(x:20,y:30)))
@@ -194,11 +193,10 @@ final class ReaderUITests: XCTestCase {
         RunLoop.current.run(until:Date().addingTimeInterval(1.6)); XCTAssertTrue(locator.isHidden)
     }
 
-    func testDoubleClickHidesAndRestoresWithoutTogglingPin() {
+    func testDoubleClickHidesAndRestoresReadingBody() {
         _ = NSApplication.shared
         let view = StealthInteraction(frame:NSRect(x:0,y:0,width:360,height:150))
-        var pinCount = 0, visibilityCount = 0
-        view.togglePinned = { pinCount += 1 }
+        var visibilityCount = 0
         view.toggleVisualVisibility = { view.visuallyHidden.toggle(); visibilityCount += 1 }
         func click(_ count:Int,_ point:NSPoint) {
             for type in [NSEvent.EventType.leftMouseDown,.leftMouseUp] {
@@ -208,9 +206,9 @@ final class ReaderUITests: XCTestCase {
         }
         click(1,NSPoint(x:180,y:75)); click(2,NSPoint(x:180,y:75))
         XCTAssertTrue(view.visuallyHidden)
-        RunLoop.current.run(until:Date().addingTimeInterval(NSEvent.doubleClickInterval+0.1)); XCTAssertEqual(pinCount,0)
+        XCTAssertEqual(visibilityCount,1)
         click(1,NSPoint(x:3,y:3)); click(2,NSPoint(x:3,y:3))
-        XCTAssertFalse(view.visuallyHidden); XCTAssertEqual(visibilityCount,2); XCTAssertEqual(pinCount,0)
+        XCTAssertFalse(view.visuallyHidden); XCTAssertEqual(visibilityCount,2)
         click(3,NSPoint(x:180,y:75)); click(4,NSPoint(x:180,y:75))
         XCTAssertTrue(view.visuallyHidden); XCTAssertEqual(visibilityCount,3)
     }
@@ -240,6 +238,49 @@ final class ReaderUITests: XCTestCase {
         reopened.isReleasedWhenClosed = false
         XCTAssertTrue(reopened.restoreSavedGeometry(named:name))
         XCTAssertEqual(reopened.frame.size,original.frame.size); XCTAssertEqual(reopened.frame.origin,original.frame.origin)
+    }
+
+    func testHoverToolbarGeometryAndPointerBridge() {
+        let screen = NSRect(x:0,y:0,width:800,height:600)
+        for reader in [NSRect(x:100,y:100,width:213,height:79),NSRect(x:200,y:520,width:200,height:80),NSRect(x:0,y:520,width:200,height:80)] {
+            let toolbar = HoverToolbarGeometry.frame(reader:reader,screen:screen)
+            XCTAssertTrue(screen.contains(toolbar)); XCTAssertFalse(reader.intersects(toolbar))
+            XCTAssertTrue(HoverToolbarGeometry.contains(NSPoint(x:toolbar.midX,y:toolbar.midY),reader:reader,toolbar:toolbar))
+        }
+        let reader = NSRect(x:100,y:100,width:213,height:79), toolbar = HoverToolbarGeometry.frame(reader:NSRect(x:100,y:100,width:213,height:79),screen:screen)
+        XCTAssertTrue(HoverToolbarGeometry.contains(NSPoint(x:toolbar.midX,y:reader.maxY+0.5),reader:reader,toolbar:toolbar))
+        XCTAssertFalse(HoverToolbarGeometry.contains(NSPoint(x:reader.maxX-3,y:reader.maxY+0.5),reader:reader,toolbar:toolbar))
+        let secondary = NSRect(x:193,y:-982,width:1512,height:949)
+        XCTAssertTrue(secondary.contains(HoverToolbarGeometry.frame(reader:NSRect(x:700,y:-400,width:213,height:79),screen:secondary)))
+    }
+    func testHoverToolbarLeaveDelayDoesNotStayVisible() {
+        var state = HoverVisibility(); let now = Date()
+        XCTAssertFalse(state.visible(inside:false,now:now))
+        XCTAssertTrue(state.visible(inside:true,now:now))
+        XCTAssertTrue(state.visible(inside:false,now:now.addingTimeInterval(0.1)))
+        XCTAssertFalse(state.visible(inside:false,now:now.addingTimeInterval(0.3)))
+        state.reset(); XCTAssertFalse(state.visible(inside:false,now:now))
+    }
+    func testHoverToolbarButtonsRouteIndependentActions() {
+        MainActor.assumeIsolated {
+            _ = NSApplication.shared
+            let reader = StealthWindow(contentRect:NSRect(x:100,y:100,width:213,height:79),styleMask:[.borderless],backing:.buffered,defer:false); reader.isReleasedWhenClosed = false
+            let toolbar = HoverToolbar(reader:reader); var actions: [String] = []
+            toolbar.onContents = { actions.append("contents") }; toolbar.onSettings = { actions.append("settings") }; toolbar.onPin = { actions.append("pin") }
+            for button in toolbar.buttons { XCTAssertTrue(button.sendAction(button.action,to:button.target)) }
+            XCTAssertEqual(actions,["contents","settings","pin"])
+            toolbar.update(enabled:false,pinned:false,tint:.white)
+            XCTAssertEqual(toolbar.buttons[2].toolTip,"置顶"); XCTAssertFalse(toolbar.panel.isVisible); XCTAssertNil(toolbar.panel.parent)
+            for fontSize: CGFloat in [8,9,20] {
+                toolbar.update(enabled:false,pinned:false,tint:.white,fontSize:fontSize)
+                for button in toolbar.buttons {
+                    XCTAssertEqual(button.frame.width,fontSize * 1.5)
+                    XCTAssertEqual(button.frame.height,fontSize * 1.5)
+                    XCTAssertTrue(NSRect(origin:.zero,size:HoverToolbarGeometry.size(fontSize:fontSize)).contains(button.frame))
+                }
+            }
+            toolbar.stop()
+        }
     }
 
 }

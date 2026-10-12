@@ -55,10 +55,10 @@ final class ReaderSurface: NSView {
     let text = ReadingTextView()
     let interaction = StealthInteraction(frame:.zero)
     let locator = WindowLocator(frame:.zero)
-    var togglePinned: (() -> Void)?
     var toggleVisualVisibility: (() -> Void)?
     private(set) var visuallyHidden = false
     private var readingBackground: CGColor?
+    private(set) var foregroundColor = NSColor.labelColor
     private var textOpacity = 1.0
     private var exposure = 1.0
     private var baseWhite = 0.96
@@ -87,7 +87,6 @@ final class ReaderSurface: NSView {
         interaction.contextMenu = { [weak self] in self?.text.menu }
         interaction.turnPage = { [weak self] in self?.scroll.scrollWheel(with:$0) }
         interaction.focusText = { [weak self] in guard let self else { return }; self.window?.makeKeyAndOrderFront(nil); self.window?.makeFirstResponder(self.text) }
-        interaction.togglePinned = { [weak self] in self?.togglePinned?() }
         interaction.toggleVisualVisibility = { [weak self] in self?.toggleVisualVisibility?() }
         scroll.turnPage = { [weak self] in self?.text.turnPage?($0) }
         scroll.contentView.postsBoundsChangedNotifications = true
@@ -135,7 +134,7 @@ final class ReaderSurface: NSView {
         let foreground = stealth ? NSColor(white:(adaptiveWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite)*exposure,alpha:textOpacity) : (dark ? NSColor(calibratedWhite:0.92,alpha:1) : NSColor(white:0.18,alpha:1))
         readingBackground = background.cgColor
         layer?.backgroundColor = visuallyHidden ? NSColor.clear.cgColor : readingBackground
-        interaction.tintColor = foreground
+        foregroundColor = foreground
         let attributed = NSMutableAttributedString(string:string,attributes:[.font:font,.foregroundColor:foreground,.paragraphStyle:paragraph])
         // Keep UTF-16 offsets stable while making paragraph spacing independent of blank lines.
         let empty = NSMutableParagraphStyle(); empty.minimumLineHeight = 1; empty.maximumLineHeight = 1
@@ -199,7 +198,7 @@ final class ReaderSurface: NSView {
         guard stealth, adaptiveWhite != prefersWhite else { return }
         adaptiveWhite = prefersWhite
         let color = NSColor(white:(prefersWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite)*exposure,alpha:textOpacity)
-        interaction.tintColor = color
+        foregroundColor = color
         let updated = NSMutableAttributedString(attributedString:source)
         updated.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:updated.length)); source = updated
         text.textStorage?.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:(text.string as NSString).length))

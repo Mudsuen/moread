@@ -9,17 +9,13 @@ struct ResizeEdges: OptionSet {
 final class StealthInteraction: NSView {
     var turnPage: ((NSEvent) -> Void)?
     var contextMenu: (() -> NSMenu?)?
-    var togglePinned: (() -> Void)?
     var toggleVisualVisibility: (() -> Void)?
     var visuallyHidden = false {
-        didSet { needsDisplay = true; window?.invalidateCursorRects(for:self); setAccessibilityLabel(visuallyHidden ? "双击恢复阅读" : (pinned ? "取消置顶" : "置顶")) }
+        didSet { needsDisplay = true; window?.invalidateCursorRects(for:self); setAccessibilityRole(visuallyHidden ? .button : .group); setAccessibilityLabel(visuallyHidden ? "双击恢复阅读" : "阅读窗口，可拖动或双击隐藏") }
     }
-    private var pendingPin: DispatchWorkItem?
     var focusText: (() -> Void)?
-    var pinned = true { didSet { needsDisplay = true; setAccessibilityLabel(visuallyHidden ? "双击恢复阅读" : (pinned ? "取消置顶" : "置顶")) } }
     private(set) var hovering = false
     var clearBackground = false
-    var tintColor = NSColor.white { didSet { needsDisplay = true } }
     private var poll: Timer?
     private var tracking: NSTrackingArea?
     private var mouseMonitor: Any?
@@ -31,17 +27,16 @@ final class StealthInteraction: NSView {
     private var startScreenPoint = NSPoint.zero
     let edgeWidth: CGFloat = 9
     let cornerWidth: CGFloat = 16
-    var pinRect: NSRect { NSRect(x:bounds.midX-17,y:bounds.midY-17,width:34,height:34) }
     override init(frame:NSRect) {
         super.init(frame:frame)
-        setAccessibilityElement(true); setAccessibilityRole(.button); setAccessibilityLabel("取消置顶")
+        setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityLabel("阅读窗口，可拖动或双击隐藏")
         poll = Timer.scheduledTimer(withTimeInterval:0.1,repeats:true) { [weak self] _ in self?.updateHover() }
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching:.mouseMoved) { [weak self] _ in self?.updateHover() }
     }
     required init?(coder:NSCoder) { fatalError() }
-    deinit { pendingPin?.cancel(); poll?.invalidate(); if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) } }
+    deinit { poll?.invalidate(); if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) } }
     override func acceptsFirstMouse(for event:NSEvent?) -> Bool { true }
-    override func accessibilityPerformPress() -> Bool { if visuallyHidden { toggleVisualVisibility?() } else { togglePinned?() }; return true }
+    override func accessibilityPerformPress() -> Bool { guard visuallyHidden else { return false }; toggleVisualVisibility?(); return true }
     override func hitTest(_ point:NSPoint) -> NSView? { !isHidden && bounds.contains(point) ? self : nil }
     func resizeEdges(at point:NSPoint) -> ResizeEdges {
         let left = point.x <= cornerWidth, right = point.x >= bounds.width-cornerWidth
@@ -76,7 +71,7 @@ final class StealthInteraction: NSView {
     override func resetCursorRects() {
         guard !isHidden else { return }
         if visuallyHidden { addCursorRect(bounds,cursor:.arrow); return }
-        addCursorRect(bounds,cursor:.openHand); addCursorRect(pinRect,cursor:.pointingHand)
+        addCursorRect(bounds,cursor:.openHand)
         let w = bounds.width, h = bounds.height, e = edgeWidth, c = cornerWidth
         let regions: [(NSRect,ResizeEdges)] = [
             (NSRect(x:0,y:c,width:e,height:max(0,h-2*c)),.left),(NSRect(x:w-e,y:c,width:e,height:max(0,h-2*c)),.right),
@@ -96,8 +91,8 @@ final class StealthInteraction: NSView {
     override func mouseMoved(with event:NSEvent) {
         hovering = true; needsDisplay = true
         if visuallyHidden { NSCursor.arrow.set(); return }
-        let point = convert(event.locationInWindow,from:nil), edges = resizeEdges(at:convert(event.locationInWindow,from:nil))
-        if !edges.isEmpty { cursor(for:edges).set() } else { (pinRect.contains(point) ? NSCursor.pointingHand : .openHand).set() }
+        let edges = resizeEdges(at:convert(event.locationInWindow,from:nil))
+        if !edges.isEmpty { cursor(for:edges).set() } else { NSCursor.openHand.set() }
     }
     private func updateHover() {
         guard let window, !isHidden, window.isVisible else { if hovering { hovering = false; needsDisplay = true }; return }
@@ -110,15 +105,8 @@ final class StealthInteraction: NSView {
         // While hovered, a visually imperceptible hit surface lets WindowServer route drags
         // through otherwise fully transparent pixels. At rest the background is exactly clear.
         if clearBackground || visuallyHidden { NSColor(white:0.5,alpha:0.005).setFill(); bounds.fill() }
-        if visuallyHidden { return }
-        if let image = NSImage(systemSymbolName:pinned ? "pin.fill" : "pin.slash",accessibilityDescription:nil)?.withSymbolConfiguration(.init(pointSize:13,weight:.medium)) {
-            let tint = tintColor.withAlphaComponent(tintColor.alphaComponent*(pinned ? 0.8 : 0.55))
-            let rendered = NSImage(size:NSSize(width:16,height:16)); rendered.lockFocus(); tint.set(); image.draw(in:NSRect(x:0,y:0,width:16,height:16)); NSRect(x:0,y:0,width:16,height:16).fill(using:.sourceAtop); rendered.unlockFocus()
-            rendered.draw(in:NSRect(x:bounds.midX-8,y:bounds.midY-8,width:16,height:16))
-        }
     }
     override func mouseDown(with event:NSEvent) {
-        pendingPin?.cancel(); pendingPin = nil
         pressed = event; pressPoint = event.locationInWindow; dragged = false; hovering = true; needsDisplay = true
         resizing = visuallyHidden || event.clickCount > 1 ? [] : resizeEdges(at:convert(event.locationInWindow,from:nil))
         startFrame = window?.frame ?? .zero; startScreenPoint = window?.convertPoint(toScreen:event.locationInWindow) ?? .zero
@@ -141,12 +129,7 @@ final class StealthInteraction: NSView {
     override func mouseUp(with event:NSEvent) {
         defer { pressed = nil }
         guard pressed != nil, !dragged, hypot(event.locationInWindow.x-pressPoint.x,event.locationInWindow.y-pressPoint.y) < 3 else { return }
-        if event.clickCount > 1 && event.clickCount.isMultiple(of:2) { pendingPin?.cancel(); pendingPin = nil; toggleVisualVisibility?(); return }
-        guard event.clickCount == 1, !visuallyHidden, resizing.isEmpty,
-              pinRect.contains(convert(pressPoint,from:nil)), pinRect.contains(convert(event.locationInWindow,from:nil)) else { return }
-        // Wait for the double-click interval so visual hiding never toggles pin as a side effect.
-        let action = DispatchWorkItem { [weak self] in self?.togglePinned?() }
-        pendingPin = action; DispatchQueue.main.asyncAfter(deadline:.now()+NSEvent.doubleClickInterval,execute:action)
+        if event.clickCount > 1 && event.clickCount.isMultiple(of:2) { toggleVisualVisibility?() }
     }
     override func rightMouseDown(with event:NSEvent) { if let menu = contextMenu?() { NSMenu.popUpContextMenu(menu,with:event,for:self) } }
     override func scrollWheel(with event:NSEvent) { if !visuallyHidden { turnPage?(event) } }
