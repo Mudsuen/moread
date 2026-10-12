@@ -183,10 +183,16 @@ public struct ReadingPosition: Codable, Equatable {
     public var character: Int
     public init(chapter: Int = 0, character: Int = 0) { self.chapter = chapter; self.character = character }
 }
+public enum ReadingMode: String, Codable { case paged, scrolling }
+
 public struct ReaderPreferences: Codable {
+    public var readingMode: ReadingMode = .paged
     public var fontSize: Double = 20
     public var stealthFontSize: Double = 11
-    public var brightness: Double = 0.94
+    public var brightness: Double = 1
+    public var textOpacity: Double = 1
+    public var adaptiveText: Bool = true
+    public var appearanceVersion: Int = 2
     public var opacity: Double = 0.92
     public var floating: Bool = true
     public var theme: String = "system"
@@ -198,12 +204,17 @@ public struct ReaderPreferences: Codable {
     public var stealthParagraphSpacing: Double = 0
     public var margin: Double = 48
     public init() {}
-    enum CodingKeys: String, CodingKey { case fontSize, stealthFontSize, brightness, opacity, floating, theme, fontName, stealthFontName, lineHeight, stealthLineHeight, paragraphSpacing, stealthParagraphSpacing, margin }
+    enum CodingKeys: String, CodingKey { case appearanceVersion, textOpacity, adaptiveText, readingMode, fontSize, stealthFontSize, brightness, opacity, floating, theme, fontName, stealthFontName, lineHeight, stealthLineHeight, paragraphSpacing, stealthParagraphSpacing, margin }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        readingMode = try c.decodeIfPresent(ReadingMode.self,forKey:.readingMode) ?? .paged
         fontSize = try c.decodeIfPresent(Double.self,forKey:.fontSize) ?? 20
         stealthFontSize = try c.decodeIfPresent(Double.self,forKey:.stealthFontSize) ?? 11
-        brightness = try c.decodeIfPresent(Double.self,forKey:.brightness) ?? 0.94
+        appearanceVersion = 2
+        let oldVersion = try c.decodeIfPresent(Int.self,forKey:.appearanceVersion) ?? 1
+        brightness = oldVersion < 2 ? 1 : (try c.decodeIfPresent(Double.self,forKey:.brightness) ?? 1)
+        textOpacity = try c.decodeIfPresent(Double.self,forKey:.textOpacity) ?? 1
+        adaptiveText = try c.decodeIfPresent(Bool.self,forKey:.adaptiveText) ?? true
         opacity = try c.decodeIfPresent(Double.self,forKey:.opacity) ?? 0.92
         floating = try c.decodeIfPresent(Bool.self,forKey:.floating) ?? true
         theme = try c.decodeIfPresent(String.self,forKey:.theme) ?? "system"
@@ -215,6 +226,10 @@ public struct ReaderPreferences: Codable {
         stealthParagraphSpacing = try c.decodeIfPresent(Double.self,forKey:.stealthParagraphSpacing) ?? 0
         margin = try c.decodeIfPresent(Double.self,forKey:.margin) ?? 48
     }
+}
+extension ReaderPreferences {
+    public mutating func adjustBrightness(by delta:Double) { brightness = min(1,max(0,(brightness+delta)*100).rounded()/100) }
+    public mutating func adjustTransparency(by delta:Double) { opacity = min(1,max(0,((opacity-delta)*100).rounded()/100)) }
 }
 public struct LibraryState: Codable {
     public var books: [Book] = []

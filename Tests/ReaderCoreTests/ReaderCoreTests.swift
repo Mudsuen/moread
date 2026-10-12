@@ -31,14 +31,14 @@ final class ReaderCoreTests: XCTestCase {
         for name in ["META-INF","OEBPS"] { try FileManager.default.moveItem(at:root.appendingPathComponent(name),to:source.appendingPathComponent(name)) }
         let book = try EPUB.importBook(from:source,library:library); try FileManager.default.removeItem(at:source)
         XCTAssertEqual(try book.text(at:1),"第二章正文")
-        var state = LibraryState(); state.books = [book]; state.selectedBook = book.id; state.positions[book.id] = ReadingPosition(chapter:1,character:23); state.preferences.opacity = 0.45; state.preferences.stealthFontSize = 9
+        var state = LibraryState(); state.books = [book]; state.selectedBook = book.id; state.positions[book.id] = ReadingPosition(chapter:1,character:23); state.preferences.readingMode = .scrolling; state.preferences.opacity = 0.45; state.preferences.stealthFontSize = 9
         let file = root.appendingPathComponent("state.json"); try state.save(to:file); let loaded = try LibraryState.load(from:file)
-        XCTAssertEqual(loaded.positions[book.id],ReadingPosition(chapter:1,character:23)); XCTAssertEqual(loaded.preferences.opacity,0.45); XCTAssertEqual(loaded.preferences.stealthFontSize,9)
+        XCTAssertEqual(loaded.positions[book.id],ReadingPosition(chapter:1,character:23)); XCTAssertEqual(loaded.preferences.readingMode,.scrolling); XCTAssertEqual(loaded.preferences.opacity,0.45); XCTAssertEqual(loaded.preferences.stealthFontSize,9)
     }
     func testOldPreferencesUpgradeWithoutLosingPosition() throws {
         let data = Data("{\"fontSize\":22,\"stealthFontSize\":9,\"brightness\":0.15,\"opacity\":0.65,\"floating\":true}".utf8)
         let p = try JSONDecoder().decode(ReaderPreferences.self,from:data)
-        XCTAssertEqual(p.fontSize,22); XCTAssertEqual(p.stealthFontSize,9); XCTAssertEqual(p.theme,"system"); XCTAssertEqual(p.lineHeight,1.35)
+        XCTAssertEqual(p.brightness,1); XCTAssertEqual(p.textOpacity,1); XCTAssertEqual(p.readingMode,.paged); XCTAssertEqual(p.fontSize,22); XCTAssertEqual(p.stealthFontSize,9); XCTAssertEqual(p.theme,"system"); XCTAssertEqual(p.lineHeight,1.35)
     }
     func testMalformedHTMLRecovery() throws {
         let text = try EPUB.plainText(Data("<html><body><ol><li>正文未闭合</ol><p>后续正文</p></body></html>".utf8))
@@ -53,4 +53,22 @@ final class ReaderCoreTests: XCTestCase {
         let p = Process(); p.executableURL = URL(fileURLWithPath:"/usr/bin/zip"); p.arguments = ["-qr",archive.path,"META-INF","OEBPS"]; p.currentDirectoryURL = root; try p.run(); p.waitUntilExit(); XCTAssertEqual(p.terminationStatus,0)
         let book = try EPUB.importBook(from:archive,library:root.appendingPathComponent("library")); XCTAssertEqual(book.chapters.count,2); XCTAssertEqual(try book.text(at:1),"第二章正文")
     }
+    func testWindowShortcutsClampAndHaveCorrectDirection() {
+        var p = ReaderPreferences(); p.brightness = 0.5; p.opacity = 0.8
+        p.adjustBrightness(by:0.05); p.adjustTransparency(by:0.05)
+        XCTAssertEqual(p.brightness,0.55); XCTAssertEqual(p.opacity,0.75)
+        for _ in 0..<30 { p.adjustBrightness(by:0.05); p.adjustTransparency(by:0.05) }
+        XCTAssertEqual(p.brightness,1); XCTAssertEqual(p.opacity,0)
+        for _ in 0..<30 { p.adjustBrightness(by:-0.05); p.adjustTransparency(by:-0.05) }
+        XCTAssertEqual(p.brightness,0); XCTAssertEqual(p.opacity,1)
+    }
+
+    func testContrastAndAppearanceAreIndependent() throws {
+        XCTAssertTrue(ContrastMath.prefersWhite(backgroundLuminance:0,brightness:1,textOpacity:1))
+        XCTAssertFalse(ContrastMath.prefersWhite(backgroundLuminance:1,brightness:1,textOpacity:1))
+        var p = ReaderPreferences(); p.theme = "light"; p.brightness = 0.3; p.opacity = 0; p.textOpacity = 0.6
+        let restored = try JSONDecoder().decode(ReaderPreferences.self,from:JSONEncoder().encode(p))
+        XCTAssertEqual(restored.theme,"light"); XCTAssertEqual(restored.brightness,0.3); XCTAssertEqual(restored.opacity,0); XCTAssertEqual(restored.textOpacity,0.6)
+    }
+
 }

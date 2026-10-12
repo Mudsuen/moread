@@ -1,4 +1,5 @@
 import AppKit
+import ReaderCore
 
 final class ReadingTextView: NSTextView {
     var turnPage: ((Int) -> Void)?
@@ -18,118 +19,212 @@ final class ReadingTextView: NSTextView {
         else { super.rightMouseDown(with:event) }
     }
     override func mouseDown(with event: NSEvent) {
-        if stealth { window?.performDrag(with: event) } else { super.mouseDown(with: event) }
+        if stealth { window?.performDrag(with:event) } else { super.mouseDown(with:event) }
     }
 }
 final class StealthWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
+
+final class ReadingScrollView: NSScrollView {
+    var paged = true
+    var turnPage: ((Int) -> Void)?
+    private var accumulated: CGFloat = 0
+    private var gestureTurned = false
+    private var lastWheelTurn: TimeInterval = -.infinity
+    override func scrollWheel(with event: NSEvent) {
+        guard paged else { super.scrollWheel(with:event); return }
+        // A trackpad gesture advances once; inertial events must not skip more pages.
+        if !event.momentumPhase.isEmpty { return }
+        if event.phase.contains(.began) { accumulated = 0; gestureTurned = false }
+        let delta = abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) ? event.scrollingDeltaY : event.scrollingDeltaX
+        if !event.phase.isEmpty {
+            accumulated += delta
+            if !gestureTurned, abs(accumulated) >= 12 { gestureTurned = true; turnPage?(accumulated < 0 ? 1 : -1) }
+            if event.phase.contains(.ended) || event.phase.contains(.cancelled) { accumulated = 0; gestureTurned = false }
+        } else if abs(delta) > 0.01, event.timestamp-lastWheelTurn >= 0.18 {
+            lastWheelTurn = event.timestamp; turnPage?(delta < 0 ? 1 : -1)
+        }
+    }
+}
+
 final class ReaderSurface: NSView {
-    let scroll = NSScrollView()
+    let scroll = ReadingScrollView()
     let text = ReadingTextView()
+    let interaction = StealthInteraction(frame:.zero)
+    let locator = WindowLocator(frame:.zero)
+    var togglePinned: (() -> Void)?
+    private var textOpacity = 1.0
+    private var exposure = 1.0
+    private var baseWhite = 0.96
+    private var adaptiveWhite: Bool?
     var didScroll: (() -> Void)?
     private var observer: NSObjectProtocol?
-    private var lastWidth: CGFloat = 0
+    private var lastSize = NSSize.zero
     private var changing = false
+    private var source = NSAttributedString(string:"")
+    private(set) var pageRanges: [NSRange] = []
+    private(set) var pageIndex = 0
+    private(set) var mode: ReadingMode = .paged
+    var displayedRange: NSRange { mode == .paged ? (pageRanges.indices.contains(pageIndex) ? pageRanges[pageIndex] : NSRange(location:0,length:0)) : NSRange(location:0,length:source.length) }
     var anchor = 0
     var stealth = false
     private var readingMargin: Double = 48
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
+    override init(frame:NSRect) {
+        super.init(frame:frame); wantsLayer = true
         scroll.drawsBackground = false; scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
-        scroll.scrollerStyle = .overlay
-        text.isEditable = false; text.isSelectable = true
-        text.isRichText = false; text.drawsBackground = false
+        scroll.autohidesScrollers = true; scroll.scrollerStyle = .overlay
+        text.isEditable = false; text.isSelectable = true; text.isRichText = false; text.drawsBackground = false
         text.isHorizontallyResizable = false; text.isVerticallyResizable = true
-        text.autoresizingMask = [.width]
-        text.textContainer?.widthTracksTextView = true
-        text.textContainer?.lineFragmentPadding = 0
-        scroll.documentView = text
-        addSubview(scroll)
+        text.autoresizingMask = [.width]; text.textContainer?.widthTracksTextView = true; text.textContainer?.lineFragmentPadding = 0
+        scroll.documentView = text; addSubview(scroll); addSubview(interaction); addSubview(locator)
+        interaction.isHidden = true
+        interaction.contextMenu = { [weak self] in self?.text.menu }
+        interaction.turnPage = { [weak self] in self?.scroll.scrollWheel(with:$0) }
+        interaction.focusText = { [weak self] in guard let self else { return }; self.window?.makeKeyAndOrderFront(nil); self.window?.makeFirstResponder(self.text) }
+        interaction.togglePinned = { [weak self] in self?.togglePinned?() }
+        scroll.turnPage = { [weak self] in self?.text.turnPage?($0) }
         scroll.contentView.postsBoundsChangedNotifications = true
-        observer = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
-            guard let self, !self.changing else { return }
+        observer = NotificationCenter.default.addObserver(forName:NSView.boundsDidChangeNotification,object:scroll.contentView,queue:.main) { [weak self] _ in
+            guard let self, !self.changing, self.mode == .scrolling else { return }
             self.anchor = self.visibleCharacter(); self.didScroll?()
         }
-        setAccessibilityLabel("阅读正文")
-        text.setAccessibilityLabel("阅读正文")
+        setAccessibilityLabel("阅读正文"); text.setAccessibilityLabel("阅读正文")
     }
-    required init?(coder: NSCoder) { fatalError() }
+    required init?(coder:NSCoder) { fatalError() }
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     override func layout() {
         let oldAnchor = anchor
         changing = true
-        super.layout(); scroll.frame = bounds
-        let width = max(20, bounds.width)
-        text.textContainerInset.width = stealth ? 10 : min(readingMargin,max(16,width*0.16))
-        text.frame.size.width = width
-        text.textContainer?.containerSize = NSSize(width: max(10,width - text.textContainerInset.width*2), height: .greatestFiniteMagnitude)
-        text.layoutManager?.ensureLayout(for: text.textContainer!)
-        let used = text.layoutManager?.usedRect(for: text.textContainer!).height ?? 0
-        text.frame.size.height = max(scroll.contentSize.height, used + text.textContainerInset.height*2 + 8)
+        super.layout(); scroll.frame = bounds; interaction.frame = bounds; locator.frame = bounds
+        let size = scroll.contentSize
+        text.textContainerInset.width = stealth ? 10 : min(readingMargin,max(16,size.width*0.16))
+        text.frame.size.width = max(20,size.width)
+        text.textContainer?.containerSize = NSSize(width:max(10,size.width-text.textContainerInset.width*2),height:.greatestFiniteMagnitude)
+        if lastSize != size {
+            lastSize = size
+            if mode == .paged { paginate(anchoredAt:oldAnchor); showPage(containing:oldAnchor) }
+            else { updateDocumentHeight(); restore(oldAnchor) }
+        } else if mode == .scrolling { updateDocumentHeight() }
         changing = false
-        if lastWidth != width { lastWidth = width; restore(oldAnchor) }
     }
-    func display(_ string: String, fontSize: CGFloat, brightness: Double, stealth: Bool, character: Int, dark: Bool, fontName: String, lineHeight: Double, paragraphSpacing: Double, margin: Double) {
-        changing = true; self.stealth = stealth; text.stealth = stealth; readingMargin = margin
-        scroll.hasVerticalScroller = !stealth
-        text.isSelectable = !stealth
-        text.textContainerInset = stealth ? NSSize(width: 10,height: 7) : NSSize(width: min(margin,max(16,bounds.width*0.16)),height: 24)
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineHeightMultiple = lineHeight
-        paragraph.paragraphSpacing = paragraphSpacing
-        paragraph.lineBreakMode = .byWordWrapping
+    private func updateDocumentHeight() {
+        guard let layout = text.layoutManager, let container = text.textContainer else { return }
+        layout.ensureLayout(for:container)
+        text.frame.size.height = max(scroll.contentSize.height,layout.usedRect(for:container).height+text.textContainerInset.height*2+8)
+    }
+    func display(_ string:String,fontSize:CGFloat,brightness:Double,stealth:Bool,character:Int,dark:Bool,fontName:String,lineHeight:Double,paragraphSpacing:Double,margin:Double,mode:ReadingMode = .paged,backgroundOpacity:Double = 1,textOpacity:Double = 1,adaptiveText:Bool = false) {
+        changing = true; self.textOpacity = textOpacity; exposure = stealth ? ContrastMath.exposure(brightness) : 1
+        baseWhite = dark ? 0.96 : 0.12
+        if !adaptiveText || !stealth || backgroundOpacity >= 1 { adaptiveWhite = nil }
+        self.mode = mode; self.stealth = stealth; text.stealth = stealth; readingMargin = margin
+        interaction.isHidden = !stealth; interaction.clearBackground = backgroundOpacity == 0
+        scroll.paged = mode == .paged; scroll.hasVerticalScroller = !stealth && mode == .scrolling
+        text.isSelectable = !stealth; text.isVerticallyResizable = mode == .scrolling
+        text.textContainerInset = NSSize(width:stealth ? 10 : margin,height:stealth ? 7 : 24)
+        let paragraph = NSMutableParagraphStyle(); paragraph.lineHeightMultiple = lineHeight; paragraph.paragraphSpacing = paragraphSpacing; paragraph.lineBreakMode = .byWordWrapping
         let font: NSFont
-        switch fontName { case "serif": font = NSFont(name:"Songti SC",size:fontSize) ?? .systemFont(ofSize:fontSize); case "mono": font = .monospacedSystemFont(ofSize:fontSize,weight:.regular); default: font = .systemFont(ofSize:fontSize) }
-        let background = stealth ? NSColor(white: brightness, alpha: 1) : (dark ? NSColor.black : NSColor(calibratedRed: 0.973, green: 0.961, blue: 0.930, alpha: 1))
-        let foreground = stealth ? NSColor(white: brightness < 0.45 ? 0.96 : 0.14, alpha: 1) : (dark ? NSColor(calibratedWhite:0.92,alpha:1) : NSColor(calibratedRed: 0.20, green: 0.22, blue: 0.20, alpha: 1))
+        switch fontName { case "serif": font = NSFont(name:"Songti SC",size:fontSize) ?? .systemFont(ofSize:fontSize); case "kai": font = NSFont(name:"Kaiti SC",size:fontSize) ?? .systemFont(ofSize:fontSize); case "mono": font = .monospacedSystemFont(ofSize:fontSize,weight:.regular); default: font = .systemFont(ofSize:fontSize) }
+        let background = stealth ? NSColor(white:(dark ? 0.025 : 0.97)*exposure,alpha:backgroundOpacity) : (dark ? .black : NSColor(white:0.97,alpha:1))
+        let foreground = stealth ? NSColor(white:(adaptiveWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite)*exposure,alpha:textOpacity) : (dark ? NSColor(calibratedWhite:0.92,alpha:1) : NSColor(white:0.18,alpha:1))
         layer?.backgroundColor = background.cgColor
-        let attributed = NSMutableAttributedString(string: string, attributes: [.font:font,.foregroundColor:foreground,.paragraphStyle:paragraph])
-        // Keep source character offsets stable while making paragraph spacing independent of blank lines.
-        let emptyParagraph = NSMutableParagraphStyle(); emptyParagraph.minimumLineHeight = 1; emptyParagraph.maximumLineHeight = 1
-        let ns = string as NSString
-        var searchRange = NSRange(location:0,length:ns.length)
-        while searchRange.length > 0 {
-            let found = ns.range(of:"\n\n",range:searchRange)
-            if found.location == NSNotFound { break }
-            attributed.addAttributes([.font:NSFont.systemFont(ofSize:1),.paragraphStyle:emptyParagraph],range:NSRange(location:found.location+1,length:1))
-            let next = found.location+found.length; searchRange = NSRange(location:next,length:ns.length-next)
+        interaction.tintColor = foreground
+        let attributed = NSMutableAttributedString(string:string,attributes:[.font:font,.foregroundColor:foreground,.paragraphStyle:paragraph])
+        // Keep UTF-16 offsets stable while making paragraph spacing independent of blank lines.
+        let empty = NSMutableParagraphStyle(); empty.minimumLineHeight = 1; empty.maximumLineHeight = 1
+        let ns = string as NSString; var remaining = NSRange(location:0,length:ns.length)
+        while remaining.length > 0 {
+            let found = ns.range(of:"\n\n",range:remaining); if found.location == NSNotFound { break }
+            attributed.addAttributes([.font:NSFont.systemFont(ofSize:1),.paragraphStyle:empty],range:NSRange(location:found.location+1,length:1))
+            let next = NSMaxRange(found); remaining = NSRange(location:next,length:ns.length-next)
         }
-        text.textStorage?.setAttributedString(attributed)
-        anchor = character; lastWidth = 0
+        source = attributed
+        if mode == .scrolling { text.textStorage?.setAttributedString(source) }
+        anchor = character; lastSize = .zero
         changing = false; needsLayout = true; layoutSubtreeIfNeeded(); restore(character)
     }
+    private func paginate(anchoredAt character:Int) {
+        pageRanges = []
+        guard source.length > 0 else { return }
+        let raw = min(max(0,character),source.length-1)
+        let fixedStart = (source.string as NSString).rangeOfComposedCharacterSequence(at:raw).location
+        let size = NSSize(width:max(10,scroll.contentSize.width-text.textContainerInset.width*2),height:max(1,scroll.contentSize.height-text.textContainerInset.height*2))
+        // Make the current first character an explicit page boundary. Resizing never pulls
+        // earlier text into the current page; prefix/suffix still cover the source exactly once.
+        for part in [NSRange(location:0,length:fixedStart),NSRange(location:fixedStart,length:source.length-fixedStart)] where part.length > 0 {
+            let storage = NSTextStorage(attributedString:source.attributedSubstring(from:part)), layout = NSLayoutManager()
+            storage.addLayoutManager(layout)
+            var end = 0
+            while end < part.length {
+                let container = NSTextContainer(containerSize:size); container.lineFragmentPadding = 0; layout.addTextContainer(container)
+                layout.ensureLayout(for:container)
+                let glyphs = layout.glyphRange(for:container)
+                guard glyphs.length > 0 else { break }
+                let range = layout.characterRange(forGlyphRange:glyphs,actualGlyphRange:nil)
+                guard NSMaxRange(range) > end else { break }
+                pageRanges.append(NSRange(location:part.location+end,length:NSMaxRange(range)-end)); end = NSMaxRange(range)
+            }
+        }
+    }
+    private func showPage(containing character:Int) {
+        guard !pageRanges.isEmpty else { anchor = character; return }
+        let index = min(max(0,character),max(0,source.length-1))
+        pageIndex = pageRanges.firstIndex(where:{ NSLocationInRange(index,$0) }) ?? max(0,pageRanges.count-1)
+        showCurrentPage()
+    }
+    private func showCurrentPage() {
+        let wasChanging = changing; changing = true
+        let range = displayedRange
+        text.textStorage?.setAttributedString(source.attributedSubstring(from:range))
+        text.frame.size.height = scroll.contentSize.height
+        text.layoutManager?.ensureLayout(for:text.textContainer!)
+        scroll.contentView.scroll(to:.zero); scroll.reflectScrolledClipView(scroll.contentView)
+        anchor = range.location; changing = wasChanging
+    }
+    func applyAdaptiveColor(_ prefersWhite:Bool?) {
+        guard stealth, adaptiveWhite != prefersWhite else { return }
+        adaptiveWhite = prefersWhite
+        let color = NSColor(white:(prefersWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite)*exposure,alpha:textOpacity)
+        interaction.tintColor = color
+        let updated = NSMutableAttributedString(attributedString:source)
+        updated.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:updated.length)); source = updated
+        text.textStorage?.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:(text.string as NSString).length))
+    }
     func visibleCharacter() -> Int {
+        if mode == .paged { return displayedRange.location }
         guard let layout = text.layoutManager, let container = text.textContainer, !text.string.isEmpty else { return 0 }
-        let point = NSPoint(x: 0, y: max(0, scroll.contentView.bounds.minY - text.textContainerInset.height))
-        let glyph = layout.glyphIndex(for: point, in: container)
-        return min((text.string as NSString).length-1, layout.characterIndexForGlyph(at: glyph))
+        let point = NSPoint(x:0,y:max(0,scroll.contentView.bounds.minY-text.textContainerInset.height))
+        let glyph = layout.glyphIndex(for:point,in:container)
+        return min((text.string as NSString).length-1,layout.characterIndexForGlyph(at:glyph))
     }
-    func restore(_ character: Int) {
+    func restore(_ character:Int) {
+        if mode == .paged { showPage(containing:character); return }
         guard let layout = text.layoutManager, let container = text.textContainer, !text.string.isEmpty else { return }
-        changing = true
-        let index = max(0,min(character,(text.string as NSString).length-1))
-        layout.ensureLayout(for: container)
-        let glyph = layout.glyphIndexForCharacter(at: index)
-        let rect = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
-        let y = max(0,min(rect.minY + text.textContainerInset.height, text.frame.height-scroll.contentSize.height))
-        scroll.contentView.scroll(to: NSPoint(x:0,y:index == 0 ? 0 : y)); scroll.reflectScrolledClipView(scroll.contentView)
-        anchor = index; changing = false
+        let wasChanging = changing; changing = true
+        let index = max(0,min(character,(text.string as NSString).length-1)); layout.ensureLayout(for:container)
+        let rect = layout.lineFragmentRect(forGlyphAt:layout.glyphIndexForCharacter(at:index),effectiveRange:nil)
+        let y = max(0,min(rect.minY+text.textContainerInset.height,text.frame.height-scroll.contentSize.height))
+        scroll.contentView.scroll(to:NSPoint(x:0,y:index == 0 ? 0 : y)); scroll.reflectScrolledClipView(scroll.contentView)
+        anchor = index; changing = wasChanging
     }
-    // Return true only if already at the boundary; the caller then changes chapter.
-    func page(_ direction: Int) -> Bool {
+    // Return true only at a chapter boundary. A short final page is never backfilled.
+    func page(_ direction:Int) -> Bool {
+        if mode == .paged {
+            let next = pageIndex+direction
+            guard pageRanges.indices.contains(next) else { return true }
+            pageIndex = next; showCurrentPage(); didScroll?(); return false
+        }
         let y = scroll.contentView.bounds.minY, maxY = max(0,text.frame.height-scroll.contentSize.height)
         if direction > 0 && y >= maxY-1 { return true }
         if direction < 0 && y <= 1 { return true }
-        let next = min(maxY,max(0,y+CGFloat(direction)*max(12,scroll.contentSize.height-24)))
-        scroll.contentView.scroll(to: NSPoint(x:0,y:next)); scroll.reflectScrolledClipView(scroll.contentView)
+        let next = min(maxY,max(0,y+CGFloat(direction)*scroll.contentSize.height))
+        scroll.contentView.scroll(to:NSPoint(x:0,y:next)); scroll.reflectScrolledClipView(scroll.contentView)
         anchor = visibleCharacter(); didScroll?(); return false
     }
     func goToEnd() {
-        scroll.contentView.scroll(to: NSPoint(x:0,y:max(0,text.frame.height-scroll.contentSize.height)))
+        if mode == .paged { pageIndex = max(0,pageRanges.count-1); showCurrentPage(); didScroll?(); return }
+        scroll.contentView.scroll(to:NSPoint(x:0,y:max(0,text.frame.height-scroll.contentSize.height)))
         scroll.reflectScrolledClipView(scroll.contentView); anchor = visibleCharacter(); didScroll?()
     }
 }

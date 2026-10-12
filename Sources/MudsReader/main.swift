@@ -11,7 +11,9 @@ if CommandLine.arguments.contains("--verify-book"), let i = CommandLine.argument
     } catch { fputs("Verification failed: \(error)\n", stderr); exit(1) }
 }
 let app = NSApplication.shared
-let delegate = ReaderApp()
-app.delegate = delegate
-app.setActivationPolicy(.regular)
-app.run()
+MainActor.assumeIsolated {
+    let delegate = ReaderApp()
+    app.delegate = delegate
+    app.setActivationPolicy(.regular)
+    withExtendedLifetime(delegate) { app.run() }
+}
