@@ -124,6 +124,7 @@ final class ReaderUITests: XCTestCase {
         var toggles = 0; view.togglePinned = { toggles += 1 }
         func event(_ type:NSEvent.EventType,_ point:NSPoint) -> NSEvent { NSEvent.mouseEvent(with:type,location:point,modifierFlags:[],timestamp:0,windowNumber:0,context:nil,eventNumber:0,clickCount:1,pressure:1)! }
         view.mouseDown(with:event(.leftMouseDown,NSPoint(x:180,y:75))); view.mouseUp(with:event(.leftMouseUp,NSPoint(x:180,y:75)))
+        RunLoop.current.run(until:Date().addingTimeInterval(NSEvent.doubleClickInterval+0.1))
         XCTAssertEqual(toggles,1)
         view.mouseDown(with:event(.leftMouseDown,NSPoint(x:2,y:2))); view.mouseUp(with:event(.leftMouseUp,NSPoint(x:2,y:2)))
         XCTAssertEqual(toggles,1)
@@ -191,6 +192,54 @@ final class ReaderUITests: XCTestCase {
         let locator = WindowLocator(frame:NSRect(x:0,y:0,width:360,height:150))
         locator.pulse(); XCTAssertFalse(locator.isHidden); XCTAssertNil(locator.hitTest(NSPoint(x:3,y:3)))
         RunLoop.current.run(until:Date().addingTimeInterval(1.6)); XCTAssertTrue(locator.isHidden)
+    }
+
+    func testDoubleClickHidesAndRestoresWithoutTogglingPin() {
+        _ = NSApplication.shared
+        let view = StealthInteraction(frame:NSRect(x:0,y:0,width:360,height:150))
+        var pinCount = 0, visibilityCount = 0
+        view.togglePinned = { pinCount += 1 }
+        view.toggleVisualVisibility = { view.visuallyHidden.toggle(); visibilityCount += 1 }
+        func click(_ count:Int,_ point:NSPoint) {
+            for type in [NSEvent.EventType.leftMouseDown,.leftMouseUp] {
+                let event = NSEvent.mouseEvent(with:type,location:point,modifierFlags:[],timestamp:0,windowNumber:0,context:nil,eventNumber:0,clickCount:count,pressure:1)!
+                if type == .leftMouseDown { view.mouseDown(with:event) } else { view.mouseUp(with:event) }
+            }
+        }
+        click(1,NSPoint(x:180,y:75)); click(2,NSPoint(x:180,y:75))
+        XCTAssertTrue(view.visuallyHidden)
+        RunLoop.current.run(until:Date().addingTimeInterval(NSEvent.doubleClickInterval+0.1)); XCTAssertEqual(pinCount,0)
+        click(1,NSPoint(x:3,y:3)); click(2,NSPoint(x:3,y:3))
+        XCTAssertFalse(view.visuallyHidden); XCTAssertEqual(visibilityCount,2); XCTAssertEqual(pinCount,0)
+        click(3,NSPoint(x:180,y:75)); click(4,NSPoint(x:180,y:75))
+        XCTAssertTrue(view.visuallyHidden); XCTAssertEqual(visibilityCount,3)
+    }
+    func testVisualHidePreservesPaintReadingAnchorAndInputSurface() {
+        _ = NSApplication.shared
+        let view = ReaderSurface(frame:NSRect(x:0,y:0,width:360,height:150))
+        let content = String(repeating:"保存当前阅读位置与外观。",count:60)
+        view.display(content,fontSize:11,brightness:0.8,stealth:true,character:120,dark:true,fontName:"system",lineHeight:1.15,paragraphSpacing:0,margin:48,backgroundOpacity:0.35,textOpacity:0.6)
+        let paint = view.layer?.backgroundColor, range = view.displayedRange, text = view.text.string
+        view.locator.pulse(); view.setVisualHidden(true)
+        XCTAssertEqual(view.scroll.alphaValue,0); XCTAssertEqual(view.layer?.backgroundColor?.alpha,0); XCTAssertTrue(view.locator.isHidden)
+        XCTAssertTrue(view.interaction.visuallyHidden); XCTAssertTrue(view.interaction.hitTest(NSPoint(x:40,y:40)) === view.interaction)
+        XCTAssertEqual(view.displayedRange,range); XCTAssertEqual(view.text.string,text)
+        view.setVisualHidden(false)
+        XCTAssertEqual(view.scroll.alphaValue,1); XCTAssertEqual(view.layer?.backgroundColor,paint); XCTAssertFalse(view.interaction.visuallyHidden)
+        XCTAssertEqual(view.displayedRange,range); XCTAssertEqual(view.text.string,text)
+        XCTAssertEqual((view.text.textStorage!.attribute(.foregroundColor,at:0,effectiveRange:nil) as! NSColor).alphaComponent,0.6)
+    }
+
+    func testBorderlessWindowRestoresSavedDimensionsAndOrigin() {
+        _ = NSApplication.shared
+        let name = "moread-window-test-\(UUID().uuidString)"
+        defer { UserDefaults.standard.removeObject(forKey:"NSWindow Frame \(name)") }
+        let original = StealthWindow(contentRect:NSRect(x:400,y:400,width:222,height:89),styleMask:[.borderless],backing:.buffered,defer:false)
+        original.isReleasedWhenClosed = false; original.saveFrame(usingName:name)
+        let reopened = StealthWindow(contentRect:NSRect(x:0,y:0,width:360,height:150),styleMask:[.borderless],backing:.buffered,defer:false)
+        reopened.isReleasedWhenClosed = false
+        XCTAssertTrue(reopened.restoreSavedGeometry(named:name))
+        XCTAssertEqual(reopened.frame.size,original.frame.size); XCTAssertEqual(reopened.frame.origin,original.frame.origin)
     }
 
 }

@@ -7,7 +7,7 @@ import ReaderCore
     var mini: StealthWindow!
     let normalSurface = ReaderSurface(frame: .zero), miniSurface = ReaderSurface(frame: .zero)
     let table = NSTableView(), search = NSSearchField(), bookPicker = NSPopUpButton()
-    let titleLabel = NSTextField(labelWithString: "闲读"), subtitleLabel = NSTextField(labelWithString: "本地阅读 · 自在留白")
+    let titleLabel = NSTextField(labelWithString: "moread"), subtitleLabel = NSTextField(labelWithString: "本地阅读 · 自在留白")
     let progressLabel = NSTextField(labelWithString: ""), chapterLabel = NSTextField(labelWithString: "")
     var state = LibraryState(), currentChapter = 0, currentText = "", filtered: [Int] = []
     var isStealth = false, importing = false, rendering = false
@@ -74,10 +74,10 @@ import ReaderCore
     }
     func buildMenus() {
         let main = NSMenu()
-        let appMenu = NSMenu(); appMenu.addItem(makeItem("关于闲读",#selector(about))); appMenu.addItem(.separator())
+        let appMenu = NSMenu(); appMenu.addItem(makeItem("关于moread",#selector(about))); appMenu.addItem(.separator())
         appMenu.addItem(makeItem("阅读设置…",#selector(showSettings),key:",")); appMenu.addItem(.separator())
-        appMenu.addItem(NSMenuItem(title:"隐藏闲读",action:#selector(NSApplication.hide(_:)),keyEquivalent:"h")); appMenu.addItem(.separator())
-        appMenu.addItem(NSMenuItem(title:"退出闲读",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q"))
+        appMenu.addItem(NSMenuItem(title:"隐藏moread",action:#selector(NSApplication.hide(_:)),keyEquivalent:"h")); appMenu.addItem(.separator())
+        appMenu.addItem(NSMenuItem(title:"退出moread",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q"))
         let appItem = NSMenuItem(); appItem.submenu = appMenu; main.addItem(appItem)
         let fileMenu = NSMenu(title:"文件"); fileMenu.addItem(makeItem("导入 EPUB…",#selector(importBook),key:"o")); fileMenu.addItem(makeItem("从 Apple Books 导入…",#selector(importFromBooks))); fileMenu.addItem(.separator()); fileMenu.addItem(makeItem("显示阅读器",#selector(showReader))); fileMenu.addItem(makeItem("关闭窗口",#selector(closeWindow),key:"w"))
         let file = NSMenuItem(); file.submenu = fileMenu; main.addItem(file)
@@ -91,7 +91,7 @@ import ReaderCore
         reading.addItem(makeItem("小窗更不透明",#selector(lessTransparent),key:String(UnicodeScalar(NSLeftArrowFunctionKey)!),modifiers:[.command,.option]))
         let read = NSMenuItem(); read.submenu = reading; main.addItem(read); NSApp.mainMenu = main
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName:"book.closed",accessibilityDescription:"闲读")
+        statusItem.button?.image = NSImage(systemSymbolName:"book.closed",accessibilityDescription:"moread")
         statusItem.button?.target = self; statusItem.button?.action = #selector(statusItemClicked)
         statusItem.button?.sendAction(on:[.leftMouseUp,.rightMouseUp])
     }
@@ -101,7 +101,7 @@ import ReaderCore
         } else { showReader() }
     }
     func contextMenu() -> NSMenu {
-        let menu = NSMenu(); menu.addItem(makeItem("显示阅读器",#selector(showReader))); menu.addItem(makeItem("切换摸鱼模式 ⇧⌘M",#selector(toggleStealth))); menu.addItem(makeItem("阅读设置… ⌘,",#selector(showSettings))); menu.addItem(.separator()); menu.addItem(makeItem("上一章",#selector(previousChapter))); menu.addItem(makeItem("下一章",#selector(nextChapter))); menu.addItem(.separator()); menu.addItem(makeItem("隐藏窗口 Esc",#selector(hideReader))); return menu
+        let menu = NSMenu(); menu.addItem(makeItem("显示阅读器",#selector(showReader))); if contrast.status == .needsPermission { menu.addItem(makeItem("自动文字需要屏幕授权…",#selector(requestScreenPermission))) }; menu.addItem(makeItem("切换摸鱼模式 ⇧⌘M",#selector(toggleStealth))); menu.addItem(makeItem("阅读设置… ⌘,",#selector(showSettings))); menu.addItem(.separator()); menu.addItem(makeItem("上一章",#selector(previousChapter))); menu.addItem(makeItem("下一章",#selector(nextChapter))); menu.addItem(.separator()); menu.addItem(makeItem("隐藏窗口 Esc",#selector(hideReader))); return menu
     }
     func button(_ symbol: String, _ label: String, _ action: Selector) -> NSButton {
         let b = NSButton(image:NSImage(systemSymbolName:symbol,accessibilityDescription:label)!,target:self,action:action)
@@ -111,7 +111,7 @@ import ReaderCore
     }
     func buildWindow() {
         window = NSWindow(contentRect:NSRect(x:0,y:0,width:1020,height:740),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
-        window.title = "闲读"; window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden
+        window.title = "moread"; window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden
         window.minSize = NSSize(width:720,height:460); window.isReleasedWhenClosed = false; window.delegate = self
         window.setFrameAutosaveName("MainReaderWindow"); if !window.setFrameUsingName("MainReaderWindow") { window.center() }
         let root = NSView(); root.wantsLayer = true; root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor; window.contentView = root
@@ -121,7 +121,7 @@ import ReaderCore
         NSLayoutConstraint.activate([sidebar.widthAnchor.constraint(equalToConstant:238),sidebar.topAnchor.constraint(equalTo:root.topAnchor),sidebar.bottomAnchor.constraint(equalTo:root.bottomAnchor),content.leadingAnchor.constraint(equalTo:sidebar.trailingAnchor),content.trailingAnchor.constraint(equalTo:root.trailingAnchor),content.topAnchor.constraint(equalTo:root.topAnchor),content.bottomAnchor.constraint(equalTo:root.bottomAnchor)])
         sidebarWidth = sidebar.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:UserDefaults.standard.bool(forKey:"SidebarVisible") ? 0 : -238); sidebarWidth?.isActive = true
         sidebar.clipsToBounds = true
-        let brand = NSTextField(labelWithString:"闲读"); brand.font = .systemFont(ofSize:18,weight:.semibold)
+        let brand = NSTextField(labelWithString:"moread"); brand.font = .systemFont(ofSize:18,weight:.semibold)
         let local = NSTextField(labelWithString:"我的书架"); local.font = .systemFont(ofSize:11,weight:.medium); local.textColor = .secondaryLabelColor
         bookPicker.target = self; bookPicker.action = #selector(selectBook); bookPicker.setAccessibilityLabel("我的书架")
         search.placeholderString = "搜索章节"; search.focusRingType = .none; search.delegate = self; search.setAccessibilityLabel("搜索章节")
@@ -150,11 +150,11 @@ import ReaderCore
     }
     func buildMini() {
         mini = StealthWindow(contentRect:NSRect(x:0,y:0,width:360,height:150),styleMask:[.borderless],backing:.buffered,defer:false)
-        mini.title = "闲读 · 摸鱼"; mini.minSize = NSSize(width:160,height:64); mini.isReleasedWhenClosed = false; mini.delegate = self
+        mini.title = "moread · 摸鱼"; mini.minSize = NSSize(width:160,height:64); mini.isReleasedWhenClosed = false; mini.delegate = self
         mini.hasShadow = false; mini.isOpaque = false; mini.backgroundColor = .clear
         mini.level = state.preferences.floating ? .floating : .normal
         mini.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]
-        mini.contentView = miniSurface; mini.setFrameAutosaveName("StealthReaderWindow"); if !mini.setFrameUsingName("StealthReaderWindow") { mini.center() }; configure(miniSurface); miniSurface.togglePinned = { [weak self] in self?.togglePin() }
+        mini.contentView = miniSurface; mini.setFrameAutosaveName("StealthReaderWindow"); if !mini.restoreSavedGeometry(named:"StealthReaderWindow") { mini.center() }; configure(miniSurface); miniSurface.togglePinned = { [weak self] in self?.togglePin() }; miniSurface.toggleVisualVisibility = { [weak self] in self?.toggleVisualHidden() }
     }
     func configure(_ surface: ReaderSurface) {
         surface.text.turnPage = { [weak self] in self?.turnPage($0) }
@@ -225,7 +225,7 @@ import ReaderCore
     }
     func syncContrast() {
         guard mini != nil else { return }
-        contrast.update(window:mini,enabled:isStealth && state.preferences.adaptiveText && state.preferences.opacity < 1)
+        contrast.update(window:mini,enabled:isStealth && !miniSurface.visuallyHidden && state.preferences.adaptiveText && state.preferences.opacity < 1)
     }
     func applyContrast() {
         let p = state.preferences
@@ -236,6 +236,7 @@ import ReaderCore
         miniSurface.applyAdaptiveColor(lastAdaptiveWhite); refreshContrastStatus()
     }
     func refreshContrastStatus() {
+        statusItem?.button?.toolTip = contrast.status == .needsPermission ? "moread：自动文字需要屏幕读取权限" : "moread · 点击显示，右键打开菜单"
         switch contrast.status {
         case .idle: adaptiveStatusLabel?.stringValue = "透明小窗显示时启用"
         case .needsPermission: adaptiveStatusLabel?.stringValue = "需要屏幕读取权限"
@@ -249,6 +250,10 @@ import ReaderCore
         state.preferences.adaptiveText = sender.state == .on
         if !state.preferences.adaptiveText { lastBackgroundLuminance = nil; miniSurface.applyAdaptiveColor(nil) }
         syncContrast(); persist()
+    }
+    @objc func toggleVisualHidden() {
+        guard isStealth else { return }
+        recordPosition(); miniSurface.setVisualHidden(!miniSurface.visuallyHidden); syncContrast(); persist()
     }
     @objc func togglePin() {
         state.preferences.floating.toggle(); mini.level = state.preferences.floating ? .floating : .normal
@@ -291,7 +296,7 @@ import ReaderCore
     func scheduleSave() { saveWork?.cancel(); let work = DispatchWorkItem { [weak self] in self?.persist() }; saveWork = work; DispatchQueue.main.asyncAfter(deadline:.now()+0.35,execute:work) }
     func persist() { saveWork?.cancel(); do { try state.save(to:stateURL) } catch { showError(error) } }
     func turnPage(_ direction: Int) {
-        guard let book else { return }
+        guard !active.visuallyHidden, let book else { return }
         if active.page(direction) {
             let next = currentChapter+direction
             if book.chapters.indices.contains(next) { openChapter(next,end:direction < 0) }
@@ -305,7 +310,7 @@ import ReaderCore
     @objc func toggleStealth() {
         guard book != nil else { importBook(); return }
         recordPosition(); let character = state.positions[book!.id]?.character ?? 0
-        isStealth.toggle(); UserDefaults.standard.set(isStealth,forKey:"StealthMode"); rendering = true; render(character:character); rendering = false
+        miniSurface.setVisualHidden(false); isStealth.toggle(); UserDefaults.standard.set(isStealth,forKey:"StealthMode"); rendering = true; render(character:character); rendering = false
         if isStealth { window.orderOut(nil); mini.makeKeyAndOrderFront(nil); mini.makeFirstResponder(miniSurface.text) }
         else { mini.orderOut(nil); window.makeKeyAndOrderFront(nil); window.makeFirstResponder(normalSurface.text) }
         updateProgress(); syncContrast(); if settings != nil { rebuildSettings() }; persist(); NSApp.activate(ignoringOtherApps:true)
@@ -315,6 +320,7 @@ import ReaderCore
     @objc func showReader() {
         guard let target = isStealth ? mini : window else { return }
         if !NSScreen.screens.contains(where: { $0.visibleFrame.intersection(target.frame).width > 40 && $0.visibleFrame.intersection(target.frame).height > 30 }) { target.center() }
+        active.setVisualHidden(false)
         target.makeKeyAndOrderFront(nil); target.makeFirstResponder(active.text)
         NSApp.activate(ignoringOtherApps:true); active.locator.pulse(); syncContrast()
     }
@@ -352,7 +358,7 @@ import ReaderCore
     @objc func showSettings() {
         if settings == nil {
             let panel = NSPanel(contentRect:NSRect(x:0,y:0,width:336,height:347),styleMask:[.titled,.closable,.utilityWindow],backing:.buffered,defer:false)
-            panel.title = "闲读"; panel.titlebarAppearsTransparent = true; panel.isReleasedWhenClosed = false; panel.level = .floating
+            panel.title = "moread"; panel.titlebarAppearsTransparent = true; panel.isReleasedWhenClosed = false; panel.level = .floating
             settings = panel; settingsTab = isStealth ? 1 : 0; rebuildSettings(); panel.center()
         } else if !(settings?.isVisible ?? false) {
             settingsTab = isStealth ? 1 : 0; rebuildSettings()
@@ -413,7 +419,7 @@ import ReaderCore
             let pin = MonochromeCheckBox(title:"置顶",target:self,action:#selector(toggleFloating(_:))); pin.controlSize = .small; pin.state = p.floating ? .on : .off; actions.addArrangedSubview(pin)
             let clear = NSButton(title:"透明文字",target:self,action:#selector(clearTextPreset)); clear.controlSize = .small; clear.bezelStyle = .rounded; actions.addArrangedSubview(clear); add(actions)
         }
-        let hint = NSTextField(labelWithString:settingsSection == 2 ? "悬停中央可切换置顶 · 空白处也可拖动" : "⌘ ± 字号    ⌥⌘ ↑↓ 亮度    ⇧⌘P 翻页 / 滚动"); hint.font = .systemFont(ofSize:9); hint.textColor = .tertiaryLabelColor; fullWidth(hint)
+        let hint = NSTextField(labelWithString:settingsSection == 2 ? "双击视觉隐藏 / 恢复 · 中央单击置顶" : "⌘ ± 字号    ⌥⌘ ↑↓ 亮度    ⇧⌘P 翻页 / 滚动"); hint.font = .systemFont(ofSize:9); hint.textColor = .tertiaryLabelColor; fullWidth(hint)
         let dim = DimmingOverlay(); dim.brightness = p.brightness; dim.translatesAutoresizingMaskIntoConstraints = false; dim.setAccessibilityElement(false); root.addSubview(dim)
         NSLayoutConstraint.activate([dim.leadingAnchor.constraint(equalTo:root.leadingAnchor),dim.trailingAnchor.constraint(equalTo:root.trailingAnchor),dim.topAnchor.constraint(equalTo:root.topAnchor),dim.bottomAnchor.constraint(equalTo:root.bottomAnchor)])
     }
@@ -462,6 +468,6 @@ import ReaderCore
         render(character:anchor); if let dim = settings?.contentView?.subviews.last as? DimmingOverlay { dim.brightness = state.preferences.brightness }; recordPosition(); scheduleSave()
     }
     @objc func toggleFloating(_ sender: NSButton) { state.preferences.floating = sender.state == .on; mini.level = state.preferences.floating ? .floating : .normal; miniSurface.interaction.pinned = state.preferences.floating; persist() }
-    @objc func about() { NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"闲读 · MudsReader",.applicationVersion:"1.1",.credits:NSAttributedString(string:"原生本地阅读器\nEPUB · 无框小窗 · 离线阅读")]) }
+    @objc func about() { NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"moread",.applicationVersion:"1.2",.credits:NSAttributedString(string:"原生本地阅读器\nEPUB · 无框小窗 · 离线阅读")]) }
     func showError(_ error: Error) { let alert = NSAlert(); alert.messageText = "无法完成操作"; alert.informativeText = error.localizedDescription; alert.addButton(withTitle:"好"); alert.runModal() }
 }

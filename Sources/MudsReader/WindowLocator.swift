@@ -7,6 +7,7 @@ final class WindowLocator: NSView {
     required init?(coder:NSCoder) { fatalError() }
     deinit { timer?.invalidate() }
     override func hitTest(_ point:NSPoint) -> NSView? { nil }
+    func cancel() { timer?.invalidate(); timer = nil; isHidden = true }
     func pulse() {
         timer?.invalidate(); started = Date(); isHidden = false; needsDisplay = true
         timer = Timer.scheduledTimer(withTimeInterval:0.05,repeats:true) { [weak self] timer in

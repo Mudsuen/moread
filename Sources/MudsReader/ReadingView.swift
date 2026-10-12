@@ -23,6 +23,7 @@ final class ReadingTextView: NSTextView {
     }
 }
 final class StealthWindow: NSWindow {
+    @discardableResult func restoreSavedGeometry(named name:String) -> Bool { setFrameUsingName(name,force:true) }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
@@ -55,6 +56,9 @@ final class ReaderSurface: NSView {
     let interaction = StealthInteraction(frame:.zero)
     let locator = WindowLocator(frame:.zero)
     var togglePinned: (() -> Void)?
+    var toggleVisualVisibility: (() -> Void)?
+    private(set) var visuallyHidden = false
+    private var readingBackground: CGColor?
     private var textOpacity = 1.0
     private var exposure = 1.0
     private var baseWhite = 0.96
@@ -84,6 +88,7 @@ final class ReaderSurface: NSView {
         interaction.turnPage = { [weak self] in self?.scroll.scrollWheel(with:$0) }
         interaction.focusText = { [weak self] in guard let self else { return }; self.window?.makeKeyAndOrderFront(nil); self.window?.makeFirstResponder(self.text) }
         interaction.togglePinned = { [weak self] in self?.togglePinned?() }
+        interaction.toggleVisualVisibility = { [weak self] in self?.toggleVisualVisibility?() }
         scroll.turnPage = { [weak self] in self?.text.turnPage?($0) }
         scroll.contentView.postsBoundsChangedNotifications = true
         observer = NotificationCenter.default.addObserver(forName:NSView.boundsDidChangeNotification,object:scroll.contentView,queue:.main) { [weak self] _ in
@@ -128,7 +133,8 @@ final class ReaderSurface: NSView {
         switch fontName { case "serif": font = NSFont(name:"Songti SC",size:fontSize) ?? .systemFont(ofSize:fontSize); case "kai": font = NSFont(name:"Kaiti SC",size:fontSize) ?? .systemFont(ofSize:fontSize); case "mono": font = .monospacedSystemFont(ofSize:fontSize,weight:.regular); default: font = .systemFont(ofSize:fontSize) }
         let background = stealth ? NSColor(white:(dark ? 0.025 : 0.97)*exposure,alpha:backgroundOpacity) : (dark ? .black : NSColor(white:0.97,alpha:1))
         let foreground = stealth ? NSColor(white:(adaptiveWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite)*exposure,alpha:textOpacity) : (dark ? NSColor(calibratedWhite:0.92,alpha:1) : NSColor(white:0.18,alpha:1))
-        layer?.backgroundColor = background.cgColor
+        readingBackground = background.cgColor
+        layer?.backgroundColor = visuallyHidden ? NSColor.clear.cgColor : readingBackground
         interaction.tintColor = foreground
         let attributed = NSMutableAttributedString(string:string,attributes:[.font:font,.foregroundColor:foreground,.paragraphStyle:paragraph])
         // Keep UTF-16 offsets stable while making paragraph spacing independent of blank lines.
@@ -181,6 +187,13 @@ final class ReaderSurface: NSView {
         text.layoutManager?.ensureLayout(for:text.textContainer!)
         scroll.contentView.scroll(to:.zero); scroll.reflectScrolledClipView(scroll.contentView)
         anchor = range.location; changing = wasChanging
+    }
+    func setVisualHidden(_ hidden:Bool) {
+        visuallyHidden = hidden
+        scroll.alphaValue = hidden ? 0 : 1
+        layer?.backgroundColor = hidden ? NSColor.clear.cgColor : readingBackground
+        interaction.visuallyHidden = hidden
+        if hidden { locator.cancel() }
     }
     func applyAdaptiveColor(_ prefersWhite:Bool?) {
         guard stealth, adaptiveWhite != prefersWhite else { return }
