@@ -63,6 +63,12 @@ final class ReaderSurface: NSView {
     private var exposure = 1.0
     private var baseWhite = 0.96
     private var adaptiveWhite: Bool?
+    private var backgroundSample: BackgroundSample?
+    private var localChoices: [Int:Bool] = [:]
+    private var adaptiveEnabled = false
+    private var brightness = 1.0
+    private var backgroundOpacity = 1.0
+    private var panelLuminance = 0.0
     var didScroll: (() -> Void)?
     private var observer: NSObjectProtocol?
     private var lastSize = NSSize.zero
@@ -92,7 +98,7 @@ final class ReaderSurface: NSView {
         scroll.contentView.postsBoundsChangedNotifications = true
         observer = NotificationCenter.default.addObserver(forName:NSView.boundsDidChangeNotification,object:scroll.contentView,queue:.main) { [weak self] _ in
             guard let self, !self.changing, self.mode == .scrolling else { return }
-            self.anchor = self.visibleCharacter(); self.didScroll?()
+            self.anchor = self.visibleCharacter(); self.applyLocalContrast(); self.didScroll?()
         }
         setAccessibilityLabel("阅读正文"); text.setAccessibilityLabel("阅读正文")
     }
@@ -112,6 +118,7 @@ final class ReaderSurface: NSView {
             else { updateDocumentHeight(); restore(oldAnchor) }
         } else if mode == .scrolling { updateDocumentHeight() }
         changing = false
+        applyLocalContrast()
     }
     private func updateDocumentHeight() {
         guard let layout = text.layoutManager, let container = text.textContainer else { return }
@@ -120,6 +127,11 @@ final class ReaderSurface: NSView {
     }
     func display(_ string:String,fontSize:CGFloat,brightness:Double,stealth:Bool,character:Int,dark:Bool,fontName:String,lineHeight:Double,paragraphSpacing:Double,margin:Double,mode:ReadingMode = .paged,backgroundOpacity:Double = 1,textOpacity:Double = 1,adaptiveText:Bool = false) {
         changing = true; self.textOpacity = textOpacity; exposure = stealth ? ContrastMath.exposure(brightness) : 1
+        self.brightness = brightness; self.backgroundOpacity = backgroundOpacity
+        adaptiveEnabled = adaptiveText && stealth && backgroundOpacity < 1
+        panelLuminance = ContrastMath.linear((dark ? 0.025 : 0.97)*exposure)
+        localChoices.removeAll()
+        if !adaptiveEnabled { backgroundSample = nil }
         baseWhite = dark ? 0.96 : 0.12
         if !adaptiveText || !stealth || backgroundOpacity >= 1 { adaptiveWhite = nil }
         self.mode = mode; self.stealth = stealth; text.stealth = stealth; readingMargin = margin
@@ -186,6 +198,7 @@ final class ReaderSurface: NSView {
         text.layoutManager?.ensureLayout(for:text.textContainer!)
         scroll.contentView.scroll(to:.zero); scroll.reflectScrolledClipView(scroll.contentView)
         anchor = range.location; changing = wasChanging
+        applyLocalContrast()
     }
     func setVisualHidden(_ hidden:Bool) {
         visuallyHidden = hidden
@@ -202,6 +215,48 @@ final class ReaderSurface: NSView {
         let updated = NSMutableAttributedString(attributedString:source)
         updated.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:updated.length)); source = updated
         text.textStorage?.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:(text.string as NSString).length))
+    }
+    func applyBackgroundSample(_ sample:BackgroundSample?) {
+        if sample?.windowFrame != backgroundSample?.windowFrame { localChoices.removeAll() }
+        backgroundSample = sample
+        adaptiveEnabled = sample != nil && stealth && backgroundOpacity < 1
+        if sample == nil { localChoices.removeAll() }
+        applyLocalContrast()
+    }
+    private func applyLocalContrast() {
+        guard adaptiveEnabled, !visuallyHidden, let sample = backgroundSample,
+              let window, sample.windowFrame == window.frame,
+              let layout = text.layoutManager, let container = text.textContainer,
+              let storage = text.textStorage, storage.length > 0 else { return }
+        layout.ensureLayout(for:container)
+        let visible = text.visibleRect
+        let origin = text.textContainerOrigin
+        let glyphs = layout.glyphRange(forBoundingRect:visible.offsetBy(dx:-origin.x,dy:-origin.y),in:container)
+        var runs: [(NSRange,Bool)] = [], nextChoices: [Int:Bool] = [:]
+        for glyph in glyphs.location..<NSMaxRange(glyphs) {
+            let range = layout.characterRange(forGlyphRange:NSRange(location:glyph,length:1),actualGlyphRange:nil)
+            guard range.length > 0, NSMaxRange(range) <= storage.length else { continue }
+            var rect = layout.boundingRect(forGlyphRange:NSRange(location:glyph,length:1),in:container).offsetBy(dx:origin.x,dy:origin.y)
+            guard rect.intersects(visible), rect.width > 0, rect.height > 0 else { continue }
+            // Use the glyph's neighborhood median so thin background text and isolated
+            // bright pixels cannot dominate the color of an entire reading window.
+            rect = rect.insetBy(dx:-rect.width*0.2,dy:0)
+            let screenRect = window.convertToScreen(text.convert(rect,to:nil))
+            guard let luminance = sample.background(under:screenRect) else { continue }
+            let background = luminance*(1-backgroundOpacity)+panelLuminance*backgroundOpacity
+            let key = range.location + (mode == .paged ? displayedRange.location : 0)
+            let white = ContrastMath.prefersWhite(backgroundLuminance:background,brightness:brightness,textOpacity:textOpacity,previous:localChoices[key])
+            nextChoices[key] = white
+            if let last = runs.last, last.1 == white, NSMaxRange(last.0) == range.location {
+                runs[runs.count-1].0.length += range.length
+            } else { runs.append((range,white)) }
+        }
+        localChoices = nextChoices
+        storage.beginEditing()
+        for (range,white) in runs {
+            storage.addAttribute(.foregroundColor,value:NSColor(white:(white ? 0.98 : 0.06)*exposure,alpha:textOpacity),range:range)
+        }
+        storage.endEditing()
     }
     func visibleCharacter() -> Int {
         if mode == .paged { return displayedRange.location }

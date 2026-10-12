@@ -71,4 +71,15 @@ final class ReaderCoreTests: XCTestCase {
         XCTAssertEqual(restored.theme,"light"); XCTAssertEqual(restored.brightness,0.3); XCTAssertEqual(restored.opacity,0); XCTAssertEqual(restored.textOpacity,0.6)
     }
 
+    func testContrastHysteresisDoesNotBlockClearBackgroundChanges() {
+        for brightness in [0.0,0.4,1.0] {
+            for opacity in [0.2,0.6,1.0] {
+                XCTAssertFalse(ContrastMath.prefersWhite(backgroundLuminance:1,brightness:brightness,textOpacity:opacity,previous:true))
+                XCTAssertTrue(ContrastMath.prefersWhite(backgroundLuminance:0,brightness:brightness,textOpacity:opacity,previous:false))
+            }
+        }
+        XCTAssertTrue(ContrastMath.prefersWhite(backgroundLuminance:0.18,brightness:1,textOpacity:1,previous:true))
+        XCTAssertFalse(ContrastMath.prefersWhite(backgroundLuminance:0.18,brightness:1,textOpacity:1,previous:false))
+    }
+
 }

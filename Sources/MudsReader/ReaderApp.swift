@@ -25,7 +25,7 @@ import ReaderCore
     let contrast = BackgroundContrast()
     var adaptiveStatusLabel: NSTextField?
     var permissionButton: NSButton?
-    var lastBackgroundLuminance: Double?
+    var lastBackgroundSample: BackgroundSample?
     var lastAdaptiveWhite: Bool?
     var sidebarWidth: NSLayoutConstraint?
     var hoverToolbar: HoverToolbar?
@@ -35,9 +35,13 @@ import ReaderCore
     override init() {
         support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("MudsReader")
         super.init()
-        contrast.onLuminance = { [weak self] luminance in self?.lastBackgroundLuminance = luminance; self?.applyContrast() }
+        contrast.onSample = { [weak self] sample in self?.lastBackgroundSample = sample; self?.applyContrast() }
         contrast.onStatus = { [weak self] status in
-            if status != .active { self?.lastBackgroundLuminance = nil; self?.miniSurface.applyAdaptiveColor(nil) }
+            // A transient screenshot failure must not replace a correct color with the
+            // theme color (white-on-white in dark mode). Keep the last valid sample.
+            if status == .idle || status == .needsPermission {
+                self?.lastBackgroundSample = nil; self?.miniSurface.applyBackgroundSample(nil); self?.miniSurface.applyAdaptiveColor(nil)
+            }
             self?.refreshContrastStatus()
         }
     }
@@ -249,18 +253,19 @@ import ReaderCore
     }
     func applyContrast() {
         let p = state.preferences
-        guard p.adaptiveText, p.opacity < 1, let luminance = lastBackgroundLuminance, contrast.status != .needsPermission else { miniSurface.applyAdaptiveColor(nil); return }
+        guard p.adaptiveText, p.opacity < 1, let sample = lastBackgroundSample, contrast.status != .needsPermission else { miniSurface.applyBackgroundSample(nil); miniSurface.applyAdaptiveColor(nil); return }
         let panel = ContrastMath.linear((dark ? 0.025 : 0.97)*ContrastMath.exposure(p.brightness))
-        let background = luminance*(1-p.opacity)+panel*p.opacity
-        lastAdaptiveWhite = ContrastMath.prefersWhite(backgroundLuminance:background,brightness:p.brightness,textOpacity:p.textOpacity)
-        miniSurface.applyAdaptiveColor(lastAdaptiveWhite); syncHoverToolbar(); refreshContrastStatus()
+        guard sample.windowFrame == mini.frame else { return }
+        let background = sample.median*(1-p.opacity)+panel*p.opacity
+        lastAdaptiveWhite = ContrastMath.prefersWhite(backgroundLuminance:background,brightness:p.brightness,textOpacity:p.textOpacity,previous:lastAdaptiveWhite)
+        miniSurface.applyAdaptiveColor(lastAdaptiveWhite); miniSurface.applyBackgroundSample(sample); syncHoverToolbar(); refreshContrastStatus()
     }
     func refreshContrastStatus() {
         statusItem?.button?.toolTip = contrast.status == .needsPermission ? "moread：自动文字需要屏幕读取权限" : "moread · 点击显示，右键打开菜单"
         switch contrast.status {
         case .idle: adaptiveStatusLabel?.stringValue = "透明小窗显示时启用"
         case .needsPermission: adaptiveStatusLabel?.stringValue = "需要屏幕读取权限"
-        case .active: adaptiveStatusLabel?.stringValue = lastAdaptiveWhite == true ? "当前 · 浅色文字" : "当前 · 深色文字"
+        case .active: adaptiveStatusLabel?.stringValue = "根据文字下方背景调整"
         case .unavailable: adaptiveStatusLabel?.stringValue = "暂时无法读取背景"
         }
         permissionButton?.isHidden = contrast.status == .active || contrast.status == .idle
@@ -268,7 +273,7 @@ import ReaderCore
     @objc func requestScreenPermission() { contrast.requestPermission(); syncContrast() }
     @objc func toggleAdaptive(_ sender:NSButton) {
         state.preferences.adaptiveText = sender.state == .on
-        if !state.preferences.adaptiveText { lastBackgroundLuminance = nil; miniSurface.applyAdaptiveColor(nil) }
+        if !state.preferences.adaptiveText { lastBackgroundSample = nil; miniSurface.applyBackgroundSample(nil); miniSurface.applyAdaptiveColor(nil) }
         syncContrast(); persist()
     }
     @objc func toggleVisualHidden() {
