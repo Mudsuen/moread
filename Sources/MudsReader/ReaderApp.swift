@@ -23,6 +23,7 @@ import ReaderCore
     var settingsSection = 0
     let normalDim = DimmingOverlay()
     let contrast = BackgroundContrast()
+    let visibilityShortcut = ArrowVisibilityShortcut()
     var adaptiveStatusLabel: NSTextField?
     var permissionButton: NSButton?
     var lastBackgroundSample: BackgroundSample?
@@ -63,11 +64,18 @@ import ReaderCore
             openChapter(min(position.chapter,book.chapters.count-1), character: position.character)
         }
         showReader()
+        visibilityShortcut.toggle = { [weak self] in
+            guard let self else { return }
+            let target = self.isStealth ? self.mini : self.window
+            if target?.isVisible == true && !self.active.visuallyHidden { self.hideReader() }
+            else { self.showReader() }
+        }
+        visibilityShortcut.start()
         if let i = CommandLine.arguments.firstIndex(of: "--import"), CommandLine.arguments.count > i+1 { importURL(URL(fileURLWithPath: CommandLine.arguments[i+1])) }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showReader(); return true }
-    func applicationWillTerminate(_ notification: Notification) { hoverToolbar?.stop(); chapterPicker?.close(); contrast.stop(); recordPosition(); persist() }
+    func applicationWillTerminate(_ notification: Notification) { visibilityShortcut.stop(); hoverToolbar?.stop(); chapterPicker?.close(); contrast.stop(); recordPosition(); persist() }
     func windowWillClose(_ notification: Notification) { recordPosition(); persist() }
     func windowDidMove(_ notification:Notification) { if !restoringWindows, (notification.object as? NSWindow) === mini { mini.saveFrame(usingName:"StealthReaderWindow"); syncContrast(); syncHoverToolbar() } }
     func windowDidResize(_ notification:Notification) { if !restoringWindows, (notification.object as? NSWindow) === mini { mini.saveFrame(usingName:"StealthReaderWindow"); syncContrast(); syncHoverToolbar() }; updateProgress() }

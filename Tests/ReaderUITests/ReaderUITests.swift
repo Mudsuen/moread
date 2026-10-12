@@ -347,4 +347,15 @@ final class ReaderUITests: XCTestCase {
         }
     }
 
+    func testArrowChordRequiresBothKeysAndFullReleaseBeforeRepeat() {
+        var chord = ArrowChord()
+        XCTAssertFalse(chord.update(left:true,right:false))
+        XCTAssertTrue(chord.update(left:true,right:true))
+        XCTAssertFalse(chord.update(left:true,right:true))
+        XCTAssertFalse(chord.update(left:false,right:true))
+        XCTAssertFalse(chord.update(left:true,right:true))
+        XCTAssertFalse(chord.update(left:false,right:false))
+        XCTAssertTrue(chord.update(left:true,right:true))
+    }
+
 }
