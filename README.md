@@ -20,6 +20,7 @@ The package script creates an ad-hoc signed `build/MudsReader.app`. Open `Packag
 - Left/Up/Page Up go to the previous page; Right/Down/Page Down/Space go to the next page. Shift-Space also goes back. At a chapter boundary, page commands move into the adjacent chapter.
 - Mouse and trackpad scrolling remain continuous within each chapter.
 - Command-[ and Command-] change chapters. Command-F searches chapter titles.
+- Command-plus (or Command-equals) increases the active mode's font size by 1 point; Command-minus decreases it. Normal reading supports 14–32 points, stealth reading 8–20 points. The current text anchor is retained.
 - Command-comma opens typography settings. Each reading mode has independent font size, typeface, line height and paragraph spacing. Normal mode additionally offers page margins. Light, dark and system themes cover the main UI.
 - The small window additionally offers brightness, transparency, always-on-top, and a black-background/white-text preset. Settings live outside the text window, in the menu bar, context menu or separate settings panel.
 - Escape hides the reader. Use the menu bar book icon or reopen the app to restore it. Command-Shift-M is an application shortcut, not a global shortcut.

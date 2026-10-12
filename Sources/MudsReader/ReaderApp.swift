@@ -62,6 +62,7 @@ final class ReaderApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTabl
         let fileMenu = NSMenu(title:"文件"); fileMenu.addItem(makeItem("导入 EPUB…",#selector(importBook),key:"o")); fileMenu.addItem(makeItem("从 Apple Books 导入…",#selector(importFromBooks))); fileMenu.addItem(.separator()); fileMenu.addItem(makeItem("显示阅读器",#selector(showReader))); fileMenu.addItem(makeItem("关闭窗口",#selector(closeWindow),key:"w"))
         let file = NSMenuItem(); file.submenu = fileMenu; main.addItem(file)
         let reading = NSMenu(title:"阅读"); reading.addItem(makeItem("切换摸鱼模式",#selector(toggleStealth),key:"m",modifiers:[.command,.shift])); reading.addItem(makeItem("上一页",#selector(previousPage),key:String(UnicodeScalar(NSLeftArrowFunctionKey)!),modifiers:[])); reading.addItem(makeItem("下一页",#selector(nextPage),key:String(UnicodeScalar(NSRightArrowFunctionKey)!),modifiers:[])); reading.addItem(.separator()); reading.addItem(makeItem("上一章",#selector(previousChapter),key:"[")); reading.addItem(makeItem("下一章",#selector(nextChapter),key:"]")); reading.addItem(makeItem("搜索目录",#selector(focusSearch),key:"f")); reading.addItem(.separator()); reading.addItem(makeItem("放大文字",#selector(larger),key:"=")); reading.addItem(makeItem("缩小文字",#selector(smaller),key:"-"))
+        let plus = makeItem("放大文字",#selector(larger),key:"+"); plus.isHidden = true; plus.allowsKeyEquivalentWhenHidden = true; reading.addItem(plus)
         let read = NSMenuItem(); read.submenu = reading; main.addItem(read); NSApp.mainMenu = main
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName:"book.closed",accessibilityDescription:"闲读")
@@ -209,7 +210,7 @@ final class ReaderApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTabl
     func changeFont(_ delta: Double) {
         let anchor = active.visibleCharacter()
         if isStealth { state.preferences.stealthFontSize = min(20,max(8,state.preferences.stealthFontSize+delta)) } else { state.preferences.fontSize = min(32,max(14,state.preferences.fontSize+delta)) }
-        render(character:anchor); persist()
+        render(character:anchor); if settings != nil { rebuildSettings() }; persist()
     }
     @objc func importBook() { openImportPanel(directory:nil) }
     @objc func importFromBooks() { openImportPanel(directory:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/iCloud~com~apple~iBooks/Documents")) }
@@ -266,7 +267,7 @@ final class ReaderApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTabl
             let check = NSButton(checkboxWithTitle:"始终置顶",target:self,action:#selector(toggleFloating(_:))); check.state = p.floating ? .on : .off; row.addArrangedSubview(check)
             let black = NSButton(title:"黑底白字",target:self,action:#selector(blackStealth)); black.bezelStyle = .rounded; row.addArrangedSubview(black); stack.addArrangedSubview(row)
         }
-        let hint = NSTextField(labelWithString:"⇧⌘M 切换模式    ⌘, 设置    Esc 隐藏"); hint.font = .systemFont(ofSize:10); hint.textColor = .secondaryLabelColor; stack.addArrangedSubview(hint)
+        let hint = NSTextField(labelWithString:"⌘＋/− 字号    ⇧⌘M 模式    Esc 隐藏"); hint.font = .systemFont(ofSize:10); hint.textColor = .secondaryLabelColor; stack.addArrangedSubview(hint)
     }
     @objc func themeChanged(_ sender: NSSegmentedControl) { state.preferences.theme = ["system","light","dark"][sender.selectedSegment]; let anchor = active.visibleCharacter(); applyAppearance(); render(character:anchor); persist() }
     @objc func settingsTabChanged(_ sender: NSSegmentedControl) { settingsTab = sender.selectedSegment; rebuildSettings() }
