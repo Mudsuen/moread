@@ -9,9 +9,13 @@ struct HoverToolbarGeometry {
     static func size(fontSize:CGFloat) -> NSSize {
         NSSize(width:buttonFrame(index:2,fontSize:fontSize).maxX + 2,height:diameter(fontSize:fontSize) + 4)
     }
-    static func frame(reader:NSRect,screen:NSRect,fontSize:CGFloat = 9) -> NSRect {
+    static func frame(reader:NSRect,screen:NSRect,fontSize:CGFloat = 9,textTop:CGFloat? = nil) -> NSRect {
         let gap: CGFloat = 1, size = Self.size(fontSize:fontSize)
-        let above = NSRect(x:max(screen.minX,min(reader.minX+2,screen.maxX-size.width)),y:reader.maxY+gap,width:size.width,height:size.height)
+        // Place visible symbols beside the first text line, rather than stacking
+        // the toolbar's padding on top of the reader's transparent top margin.
+        let symbolBottom = 2 + diameter(fontSize:fontSize) * (1-0.58)/2
+        let bottom = textTop.map { $0 + 2 - symbolBottom } ?? reader.maxY+gap
+        let above = NSRect(x:max(screen.minX,min(reader.minX+2,screen.maxX-size.width)),y:bottom,width:size.width,height:size.height)
         if screen.contains(above) { return above }
         let left = NSRect(x:reader.minX-gap-size.width,y:min(reader.maxY,screen.maxY)-size.height,width:size.width,height:size.height)
         if screen.contains(left) { return left }
@@ -60,6 +64,7 @@ final class FloatingCircleButton: NSButton {
     let panel: NSPanel
     let buttons: [FloatingCircleButton]
     weak var reader: NSWindow?
+    var textTop: (() -> CGFloat?)?
     var onContents: (() -> Void)?
     var onSettings: (() -> Void)?
     var onPin: (() -> Void)?
@@ -103,7 +108,7 @@ final class FloatingCircleButton: NSButton {
     private func hide() { panel.parent?.removeChildWindow(panel); panel.orderOut(nil) }
     func refresh() {
         guard enabled, let reader, reader.isVisible, !NSApp.isHidden, reader.occlusionState.contains(.visible), let screen = reader.screen else { hide(); visibility.reset(); return }
-        let frame = HoverToolbarGeometry.frame(reader:reader.frame,screen:screen.visibleFrame,fontSize:fontSize)
+        let frame = HoverToolbarGeometry.frame(reader:reader.frame,screen:screen.visibleFrame,fontSize:fontSize,textTop:textTop?())
         if panel.frame != frame { panel.setFrame(frame,display:true) }
         panel.level = reader.level
         let inside = HoverToolbarGeometry.contains(NSEvent.mouseLocation,reader:reader.frame,toolbar:frame)

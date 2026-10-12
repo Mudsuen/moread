@@ -200,6 +200,21 @@ final class ReaderSurface: NSView {
         anchor = range.location; changing = wasChanging
         applyLocalContrast()
     }
+    func visibleTextTopOnScreen() -> CGFloat? {
+        guard let window, let layout = text.layoutManager, let container = text.textContainer else { return nil }
+        layout.ensureLayout(for:container)
+        let origin = text.textContainerOrigin, visible = text.visibleRect
+        let glyphs = layout.glyphRange(forBoundingRect:visible.offsetBy(dx:-origin.x,dy:-origin.y),in:container)
+        let string = text.string as NSString
+        for glyph in glyphs.location..<NSMaxRange(glyphs) {
+            let range = layout.characterRange(forGlyphRange:NSRange(location:glyph,length:1),actualGlyphRange:nil)
+            guard NSMaxRange(range) <= string.length,
+                  !string.substring(with:range).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { continue }
+            let rect = layout.boundingRect(forGlyphRange:NSRange(location:glyph,length:1),in:container).offsetBy(dx:origin.x,dy:origin.y).intersection(visible)
+            if !rect.isEmpty { return window.convertToScreen(text.convert(rect,to:nil)).maxY }
+        }
+        return nil
+    }
     func setVisualHidden(_ hidden:Bool) {
         visuallyHidden = hidden
         scroll.alphaValue = hidden ? 0 : 1

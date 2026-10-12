@@ -250,6 +250,10 @@ final class ReaderUITests: XCTestCase {
         let reader = NSRect(x:100,y:100,width:213,height:79), toolbar = HoverToolbarGeometry.frame(reader:NSRect(x:100,y:100,width:213,height:79),screen:screen)
         XCTAssertTrue(HoverToolbarGeometry.contains(NSPoint(x:toolbar.midX,y:reader.maxY+0.5),reader:reader,toolbar:toolbar))
         XCTAssertFalse(HoverToolbarGeometry.contains(NSPoint(x:reader.maxX-3,y:reader.maxY+0.5),reader:reader,toolbar:toolbar))
+        let textTop = reader.maxY - 12
+        let tight = HoverToolbarGeometry.frame(reader:reader,screen:screen,fontSize:9,textTop:textTop)
+        let symbolBottom = tight.minY + 2 + 9*1.5*(1-0.58)/2
+        XCTAssertEqual(symbolBottom-textTop,2,accuracy:0.001)
         let secondary = NSRect(x:193,y:-982,width:1512,height:949)
         XCTAssertTrue(secondary.contains(HoverToolbarGeometry.frame(reader:NSRect(x:700,y:-400,width:213,height:79),screen:secondary)))
     }

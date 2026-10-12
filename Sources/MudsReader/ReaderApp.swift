@@ -162,6 +162,7 @@ import ReaderCore
         mini.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]
         mini.contentView = miniSurface; mini.setFrameAutosaveName("StealthReaderWindow"); if !mini.restoreSavedGeometry(named:"StealthReaderWindow") { mini.center() }; configure(miniSurface); miniSurface.toggleVisualVisibility = { [weak self] in self?.toggleVisualHidden() }
         hoverToolbar = HoverToolbar(reader:mini)
+        hoverToolbar?.textTop = { [weak self] in self?.miniSurface.visibleTextTopOnScreen() }
         hoverToolbar?.onContents = { [weak self] in self?.showChapterPicker() }
         hoverToolbar?.onSettings = { [weak self] in self?.showSettings() }
         hoverToolbar?.onPin = { [weak self] in self?.togglePin() }
