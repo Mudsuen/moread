@@ -11,6 +11,7 @@ struct ArrowChord {
 
 @MainActor final class ArrowVisibilityShortcut {
     var toggle: (() -> Void)?
+    var isEnabled: () -> Bool = { true }
     private var chord = ArrowChord()
     private var timer: Timer?
     private var monitor: Any?
@@ -20,7 +21,7 @@ struct ArrowChord {
     private var suppressArrows = false
     func start() {
         monitor = NSEvent.addLocalMonitorForEvents(matching:[.keyDown,.keyUp]) { [weak self] event in
-            guard let self, !self.forwarding, event.keyCode == 123 || event.keyCode == 124 else { return event }
+            guard let self, self.isEnabled(), !self.forwarding, event.keyCode == 123 || event.keyCode == 124 else { return event }
             self.check()
             if self.suppressArrows { return nil }
             guard event.modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty else { return event }
@@ -35,6 +36,7 @@ struct ArrowChord {
         timer = t; RunLoop.main.add(t,forMode:.common)
     }
     private func check() {
+        guard isEnabled() else { chord = ArrowChord(); suppressArrows = false; return }
         let left = CGEventSource.keyState(.combinedSessionState,key:123)
         let right = CGEventSource.keyState(.combinedSessionState,key:124)
         if !left && !right { suppressArrows = false }

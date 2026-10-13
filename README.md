@@ -107,6 +107,9 @@ Apple Books import is a local file import, not a connection to your Apple accoun
 
 ## Keyboard and mouse
 
+Open Settings → **操作** (Controls) for the built-in shortcut reference and recovery instructions. The left/right arrow visibility chord, double-click visual concealment, and reveal-location highlight each have an independent persistent toggle, enabled by default.
+
+
 | Action | Shortcut |
 | --- | --- |
 | Previous / next page | ← or ↑ / → or ↓ |

@@ -70,6 +70,7 @@ import ReaderCore
             if target?.isVisible == true && !self.active.visuallyHidden { self.hideReader() }
             else { self.showReader() }
         }
+        visibilityShortcut.isEnabled = { [weak self] in self?.interactionOption("ArrowVisibilityEnabled") ?? false }
         visibilityShortcut.start()
         if let i = CommandLine.arguments.firstIndex(of: "--import"), CommandLine.arguments.count > i+1 { importURL(URL(fileURLWithPath: CommandLine.arguments[i+1])) }
     }
@@ -168,7 +169,9 @@ import ReaderCore
         mini.hasShadow = false; mini.isOpaque = false; mini.backgroundColor = .clear
         mini.level = state.preferences.floating ? .floating : .normal
         mini.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]
-        mini.contentView = miniSurface; mini.setFrameAutosaveName("StealthReaderWindow"); if !mini.restoreSavedGeometry(named:"StealthReaderWindow") { mini.center() }; configure(miniSurface); miniSurface.toggleVisualVisibility = { [weak self] in self?.toggleVisualHidden() }
+        mini.contentView = miniSurface; mini.setFrameAutosaveName("StealthReaderWindow"); if !mini.restoreSavedGeometry(named:"StealthReaderWindow") { mini.center() }; configure(miniSurface); miniSurface.toggleVisualVisibility = { [weak self] in
+            guard let self, self.interactionOption("DoubleClickVisibilityEnabled") else { return }; self.toggleVisualHidden()
+        }
         hoverToolbar = HoverToolbar(reader:mini)
         hoverToolbar?.textTop = { [weak self] in self?.miniSurface.visibleTextTopOnScreen() }
         hoverToolbar?.onContents = { [weak self] in self?.showChapterPicker() }
@@ -356,7 +359,7 @@ import ReaderCore
         if !NSScreen.screens.contains(where: { $0.visibleFrame.intersection(target.frame).width > 40 && $0.visibleFrame.intersection(target.frame).height > 30 }) { target.center() }
         active.setVisualHidden(false)
         target.makeKeyAndOrderFront(nil); target.makeFirstResponder(active.text)
-        NSApp.activate(ignoringOtherApps:true); active.locator.pulse(); syncContrast(); syncHoverToolbar()
+        NSApp.activate(ignoringOtherApps:true); if interactionOption("RevealHighlightEnabled") { active.locator.pulse() }; syncContrast(); syncHoverToolbar()
     }
     @objc func larger() { changeFont(1) }
     @objc func smaller() { changeFont(-1) }
@@ -404,7 +407,7 @@ import ReaderCore
     }
     func rebuildSettings() {
         guard let panel = settings else { return }; settingsValues.removeAll(); adaptiveStatusLabel = nil; permissionButton = nil
-        let top = panel.frame.maxY, height: CGFloat = settingsSection == 0 ? 347 : (settingsSection == 1 ? 251 : 293)
+        let top = panel.frame.maxY, height: CGFloat = settingsSection == 3 ? 475 : (settingsSection == 0 ? 347 : (settingsSection == 1 ? 251 : 293))
         panel.setContentSize(NSSize(width:336,height:height)); panel.setFrameOrigin(NSPoint(x:panel.frame.minX,y:top-panel.frame.height))
         let root = NSView(); root.wantsLayer = true; root.layer?.backgroundColor = ReaderPalette.panel.cgColor; panel.contentView = root
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(stack)
@@ -416,7 +419,26 @@ import ReaderCore
         let themeIcon = state.preferences.theme == "system" ? "circle.lefthalf.filled" : (state.preferences.theme == "dark" ? "moon.fill" : "sun.max.fill")
         for control in [button(themeIcon,"外观：跟随系统 / 亮色 / 暗色",#selector(showThemeMenu(_:))),button(state.preferences.readingMode == .paged ? "book.pages" : "scroll","切换翻页 / 滚动 ⇧⌘P",#selector(toggleReadingMode)),button(isStealth ? "rectangle.expand.vertical" : "rectangle.compress.vertical","切换正常 / 摸鱼 ⇧⌘M",#selector(toggleStealth))] { control.contentTintColor = ReaderPalette.accent; header.addArrangedSubview(control) }
         fullWidth(header)
-        let sections = StyledSegment(labels:["排版","外观","小窗"],target:self,action:#selector(settingsSectionChanged(_:))); sections.selectedSegment = settingsSection; sections.setAccessibilityLabel("设置分类"); fullWidth(sections)
+        let sections = StyledSegment(labels:["排版","外观","小窗","操作"],target:self,action:#selector(settingsSectionChanged(_:))); sections.selectedSegment = settingsSection; sections.setAccessibilityLabel("设置分类"); fullWidth(sections)
+        if settingsSection == 3 {
+            let options = SettingsCard(frame:.zero); fullWidth(options)
+            for (key,title) in [("ArrowVisibilityEnabled","← + → 同时按住：隐藏 / 显示"),("DoubleClickVisibilityEnabled","双击小窗：视觉隐藏 / 恢复"),("RevealHighlightEnabled","唤起窗口时高亮定位")] {
+                let control = MonochromeCheckBox(title:title,target:self,action:#selector(interactionOptionChanged(_:)))
+                control.identifier = NSUserInterfaceItemIdentifier(key); control.state = interactionOption(key) ? .on : .off
+                control.font = .systemFont(ofSize:11); options.stack.addArrangedSubview(control)
+            }
+            let note = NSTextField(wrappingLabelWithString:"左右键需全部松开后才能再次触发。视觉隐藏保留窗口位置，可再次双击恢复。")
+            note.font = .systemFont(ofSize:10); note.textColor = .secondaryLabelColor; note.widthAnchor.constraint(equalToConstant:284).isActive = true; options.stack.addArrangedSubview(note)
+            let scroll = NSScrollView(); scroll.drawsBackground = false; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
+            scroll.heightAnchor.constraint(equalToConstant:215).isActive = true; fullWidth(scroll)
+            let text = NSTextView(); text.isEditable = false; text.isSelectable = true; text.drawsBackground = false
+            text.textContainerInset = NSSize(width:8,height:6); text.isHorizontallyResizable = false; text.autoresizingMask = [.width]
+            text.textContainer?.widthTracksTextView = true; text.font = .systemFont(ofSize:11); text.textColor = .labelColor
+            text.string = "快捷键与恢复方式\n\n← / ↑ / Page Up　上一页\n→ / ↓ / Page Down　下一页\n空格 / ⇧空格　下一页 / 上一页\n⌘[ / ⌘]　上一章 / 下一章\n⌘F　搜索目录\n⌘,　打开设置\n⌘+ / ⌘−　放大 / 缩小字号\n⌥⌘↑ / ↓　提高 / 降低亮度\n⌥⌘→ / ←　增加 / 减少背景透明\n⇧⌘P　翻页 / 滚动\n⇧⌘M　正常阅读 / 摸鱼小窗\nEsc / ⌘W　隐藏窗口\n\n点击 Dock 图标或左键菜单栏图标可唤起。\n右键菜单栏图标打开菜单。\n指针进入小窗显示目录、设置和置顶按钮。\n拖动正文移动窗口，拖动边缘调整大小。\n\n除左右键组合外，快捷键需 moread 获得焦点。"
+            text.setAccessibilityLabel("快捷键与恢复方式"); scroll.documentView = text
+            text.frame = NSRect(x:0,y:0,width:308,height:560)
+            return
+        }
         let card = SettingsCard(frame:.zero); fullWidth(card)
         let p = state.preferences, stealth = settingsTab == 1
         func add(_ view:NSView) { view.widthAnchor.constraint(equalToConstant:284).isActive = true; card.stack.addArrangedSubview(view) }
@@ -458,6 +480,14 @@ import ReaderCore
         }
         let hint = NSTextField(labelWithString:settingsSection == 2 ? "双击隐藏 / 恢复 · 悬停左上角显示工具" : "⌘ ± 字号    ⌥⌘ ↑↓ 亮度    ⇧⌘P 翻页 / 滚动"); hint.font = .systemFont(ofSize:9); hint.textColor = .tertiaryLabelColor; fullWidth(hint)
 
+    }
+    func interactionOption(_ key:String) -> Bool {
+        UserDefaults.standard.object(forKey:key) == nil || UserDefaults.standard.bool(forKey:key)
+    }
+    @objc func interactionOptionChanged(_ sender:NSButton) {
+        guard let key = sender.identifier?.rawValue else { return }
+        UserDefaults.standard.set(sender.state == .on,forKey:key)
+        if key == "RevealHighlightEnabled", sender.state == .off { active.locator.cancel() }
     }
     @objc func settingsSectionChanged(_ sender:NSSegmentedControl) { settingsSection = sender.selectedSegment; rebuildSettings() }
     @objc func fontCardChanged(_ sender:NSButton) {
