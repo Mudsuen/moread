@@ -51,11 +51,11 @@ import ReaderCore
             try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: stateURL.path) { state = try LibraryState.load(from: stateURL) }
         } catch { showError(error) }
-        applyAppearance(); buildMenus(); buildWindow(); buildMini(); restoringWindows = false; refreshLibrary()
+        applyAppearance(); buildMenus(); buildWindow(); buildMini(); applyAppearance(); restoringWindows = false; refreshLibrary()
         isStealth = UserDefaults.standard.bool(forKey:"StealthMode")
         appearanceObserver = DistributedNotificationCenter.default().addObserver(forName:NSNotification.Name("AppleInterfaceThemeChangedNotification"),object:nil,queue:.main) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.state.preferences.theme == "system" else { return }
+                guard let self else { return }
                 self.applyAppearance(); self.render(character:self.active.visibleCharacter()); self.rebuildSettings()
             }
         }
@@ -387,7 +387,10 @@ import ReaderCore
     }
     var pageColor: NSColor { dark ? NSColor.black : NSColor(white:0.97,alpha:1) }
     func applyAppearance() {
-        switch state.preferences.theme { case "dark": NSApp.appearance = NSAppearance(named:.darkAqua); case "light": NSApp.appearance = NSAppearance(named:.aqua); default: NSApp.appearance = nil }
+        NSApp.appearance = nil
+        let appearance: NSAppearance?
+        switch state.preferences.theme { case "dark": appearance = NSAppearance(named:.darkAqua); case "light": appearance = NSAppearance(named:.aqua); default: appearance = nil }
+        window?.appearance = appearance; mini?.appearance = appearance
     }
     @objc func showSettings() {
         if settings == nil {
@@ -454,8 +457,7 @@ import ReaderCore
             let clear = NSButton(title:"透明文字",target:self,action:#selector(clearTextPreset)); clear.controlSize = .small; clear.bezelStyle = .rounded; actions.addArrangedSubview(clear); add(actions)
         }
         let hint = NSTextField(labelWithString:settingsSection == 2 ? "双击隐藏 / 恢复 · 悬停左上角显示工具" : "⌘ ± 字号    ⌥⌘ ↑↓ 亮度    ⇧⌘P 翻页 / 滚动"); hint.font = .systemFont(ofSize:9); hint.textColor = .tertiaryLabelColor; fullWidth(hint)
-        let dim = DimmingOverlay(); dim.brightness = p.brightness; dim.translatesAutoresizingMaskIntoConstraints = false; dim.setAccessibilityElement(false); root.addSubview(dim)
-        NSLayoutConstraint.activate([dim.leadingAnchor.constraint(equalTo:root.leadingAnchor),dim.trailingAnchor.constraint(equalTo:root.trailingAnchor),dim.topAnchor.constraint(equalTo:root.topAnchor),dim.bottomAnchor.constraint(equalTo:root.bottomAnchor)])
+
     }
     @objc func settingsSectionChanged(_ sender:NSSegmentedControl) { settingsSection = sender.selectedSegment; rebuildSettings() }
     @objc func fontCardChanged(_ sender:NSButton) {

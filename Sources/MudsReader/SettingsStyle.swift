@@ -2,7 +2,7 @@ import AppKit
 import ReaderCore
 
 enum ReaderPalette {
-    static var dark: Bool { NSApp.effectiveAppearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua }
+    static var dark: Bool { NSAppearance.currentDrawing().bestMatch(from:[.darkAqua,.aqua]) == .darkAqua }
     static var accent: NSColor { dark ? NSColor(white:0.88,alpha:1) : NSColor(white:0.22,alpha:1) }
     static var panel: NSColor { dark ? NSColor(white:0.10,alpha:1) : NSColor(white:0.96,alpha:1) }
     static var card: NSColor { dark ? NSColor(white:1,alpha:0.045) : NSColor(white:1,alpha:0.75) }

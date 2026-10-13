@@ -11,6 +11,8 @@ A native, local-first EPUB reader with a full reading view and a tiny, transpare
 [![License: MIT](https://img.shields.io/badge/License-MIT-lightgrey.svg)](LICENSE)
 [![macOS tests](https://github.com/Mudsuen/moread/actions/workflows/test.yml/badge.svg)](https://github.com/Mudsuen/moread/actions/workflows/test.yml)
 
+[Download for macOS · Apple Silicon](https://github.com/Mudsuen/moread/releases/latest) · [All releases](https://github.com/Mudsuen/moread/releases)
+
 </div>
 
 ## Reading, without the extra chrome
@@ -18,6 +20,32 @@ A native, local-first EPUB reader with a full reading view and a tiny, transpare
 moread is built for people who switch between focused reading and keeping a few lines beside their work. Open a local EPUB, pick a chapter, and read in a conventional window—or shrink it into a borderless, always-on-top reader.
 
 The interface is native Swift and AppKit, with a restrained grayscale palette. Books and reading positions stay on your Mac. There are no accounts, subscriptions, analytics, or third-party runtime dependencies.
+
+## Download and install
+
+**[Download the latest DMG](https://github.com/Mudsuen/moread/releases/latest/download/moread-1.3.4-macOS-arm64.dmg)** · [ZIP alternative](https://github.com/Mudsuen/moread/releases/latest/download/moread-1.3.4-macOS-arm64.zip)
+
+For Apple Silicon Macs running macOS 14 or later. Open the DMG, drag **moread** into **Applications**, eject the disk image, then open the app. With the ZIP, extract it and move `moread.app` into Applications. Quit an existing copy before replacing it; your local library is kept separately.
+
+**Signing:** this build is signed with an Apple Development certificate and is **not notarized**. Gatekeeper may block the first launch. After attempting to open it, review the warning in **System Settings → Privacy & Security** and use **Open Anyway** only if you trust this download. Managed Macs may prohibit this. Do not disable Gatekeeper. SHA-256 checksums are included with the release; Intel builds are not provided.
+
+## Screenshots
+
+Real application captures using original demonstration text and an isolated sample library. The gradient behind the compact reader is a separate demonstration background, not an app backplate.
+
+### Focused reading
+
+![Normal reading window with original sample text](docs/images/reader.png)
+
+### Transparent compact window
+
+![Text-only compact reader over a continuous gradient background](docs/images/compact.png)
+
+### Typography settings
+
+<img src="docs/images/settings.png" alt="Compact typography settings with font previews" width="380">
+
+Settings follow the system appearance and stay at full brightness. Reading theme, brightness, and transparency affect the reading windows only.
 
 ## Features
 
@@ -43,7 +71,7 @@ Resizing retains the current page's first source character. Visual concealment p
 - An unencrypted EPUB file or an unpacked EPUB directory.
 - Optional macOS screen-recording permission for adaptive text contrast.
 
-The current interface is primarily in Chinese. Apple Silicon has been tested; Intel compatibility has not been verified. This repository currently distributes source code. It does not provide a notarized public installer.
+The current interface is primarily in Chinese. Apple Silicon has been tested; Intel compatibility has not been verified. Prebuilt Apple Silicon DMG and ZIP downloads are available in Releases. They are development-signed, not notarized.
 
 ## Build from source
 

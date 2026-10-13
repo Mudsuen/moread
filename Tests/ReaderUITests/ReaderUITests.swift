@@ -358,4 +358,22 @@ final class ReaderUITests: XCTestCase {
         XCTAssertTrue(chord.update(left:true,right:true))
     }
 
+    func testSettingsRemainUndimmedAndFollowSystemAppearance() {
+        MainActor.assumeIsolated {
+            _ = NSApplication.shared
+            let app = ReaderApp()
+            app.window = NSWindow(contentRect:NSRect(x:0,y:0,width:300,height:200),styleMask:[.titled],backing:.buffered,defer:false)
+            app.window.isReleasedWhenClosed = false
+            app.settings = NSPanel(contentRect:NSRect(x:0,y:0,width:336,height:347),styleMask:[.titled],backing:.buffered,defer:false)
+            app.settings?.isReleasedWhenClosed = false
+            for theme in ["dark","light"] {
+                app.state.preferences.theme = theme; app.state.preferences.brightness = 0; app.state.preferences.opacity = 0
+                app.applyAppearance(); app.rebuildSettings()
+                XCTAssertNil(NSApp.appearance); XCTAssertNil(app.settings?.appearance)
+                XCTAssertFalse(app.settings!.contentView!.subviews.contains { $0 is DimmingOverlay })
+                XCTAssertEqual(app.settings!.alphaValue,1)
+            }
+        }
+    }
+
 }
