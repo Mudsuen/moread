@@ -68,7 +68,7 @@ import ReaderCore
             guard let self else { return }
             let target = self.isStealth ? self.mini : self.window
             if target?.isVisible == true && !self.active.visuallyHidden { self.hideReader() }
-            else { self.showReader() }
+            else { self.revealReader(highlight:false) }
         }
         visibilityShortcut.isEnabled = { [weak self] in self?.interactionOption("ArrowVisibilityEnabled") ?? false }
         visibilityShortcut.start()
@@ -352,14 +352,15 @@ import ReaderCore
         else { mini.orderOut(nil); window.makeKeyAndOrderFront(nil); window.makeFirstResponder(normalSurface.text) }
         updateProgress(); syncContrast(); syncHoverToolbar(); if settings != nil { rebuildSettings() }; persist(); NSApp.activate(ignoringOtherApps:true)
     }
-    @objc func hideReader() { hoverToolbar?.stop(); chapterPicker?.close(); contrast.stop(); recordPosition(); persist(); (isStealth ? mini : window)?.orderOut(nil); settings?.orderOut(nil) }
+    @objc func hideReader() { active.locator.cancel(); hoverToolbar?.stop(); chapterPicker?.close(); contrast.stop(); recordPosition(); persist(); (isStealth ? mini : window)?.orderOut(nil); settings?.orderOut(nil) }
     @objc func closeWindow() { hideReader() }
-    @objc func showReader() {
+    @objc func showReader() { revealReader(highlight:true) }
+    func revealReader(highlight:Bool) {
         guard let target = isStealth ? mini : window else { return }
         if !NSScreen.screens.contains(where: { $0.visibleFrame.intersection(target.frame).width > 40 && $0.visibleFrame.intersection(target.frame).height > 30 }) { target.center() }
         active.setVisualHidden(false)
         target.makeKeyAndOrderFront(nil); target.makeFirstResponder(active.text)
-        NSApp.activate(ignoringOtherApps:true); if interactionOption("RevealHighlightEnabled") { active.locator.pulse() }; syncContrast(); syncHoverToolbar()
+        NSApp.activate(ignoringOtherApps:true); if highlight && interactionOption("RevealHighlightEnabled") { active.locator.pulse() } else { active.locator.cancel() }; syncContrast(); syncHoverToolbar()
     }
     @objc func larger() { changeFont(1) }
     @objc func smaller() { changeFont(-1) }
@@ -422,12 +423,12 @@ import ReaderCore
         let sections = StyledSegment(labels:["排版","外观","小窗","操作"],target:self,action:#selector(settingsSectionChanged(_:))); sections.selectedSegment = settingsSection; sections.setAccessibilityLabel("设置分类"); fullWidth(sections)
         if settingsSection == 3 {
             let options = SettingsCard(frame:.zero); fullWidth(options)
-            for (key,title) in [("ArrowVisibilityEnabled","← + → 同时按住：隐藏 / 显示"),("DoubleClickVisibilityEnabled","双击小窗：视觉隐藏 / 恢复"),("RevealHighlightEnabled","唤起窗口时高亮定位")] {
+            for (key,title) in [("ArrowVisibilityEnabled","← + → 同时按住：隐藏 / 显示"),("DoubleClickVisibilityEnabled","双击小窗：视觉隐藏 / 恢复"),("RevealHighlightEnabled","图标唤起时显示高亮白边")] {
                 let control = MonochromeCheckBox(title:title,target:self,action:#selector(interactionOptionChanged(_:)))
                 control.identifier = NSUserInterfaceItemIdentifier(key); control.state = interactionOption(key) ? .on : .off
                 control.font = .systemFont(ofSize:11); options.stack.addArrangedSubview(control)
             }
-            let note = NSTextField(wrappingLabelWithString:"左右键需全部松开后才能再次触发。视觉隐藏保留窗口位置，可再次双击恢复。")
+            let note = NSTextField(wrappingLabelWithString:"快捷键唤起不显示白边。左右键需全部松开后再次触发；双击视觉隐藏后可再次双击恢复。")
             note.font = .systemFont(ofSize:10); note.textColor = .secondaryLabelColor; note.widthAnchor.constraint(equalToConstant:284).isActive = true; options.stack.addArrangedSubview(note)
             let scroll = NSScrollView(); scroll.drawsBackground = false; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
             scroll.heightAnchor.constraint(equalToConstant:215).isActive = true; fullWidth(scroll)
