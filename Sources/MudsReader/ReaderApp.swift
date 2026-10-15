@@ -17,6 +17,7 @@ import ReaderCore
     var stateURL: URL { support.appendingPathComponent("library.json") }
     var book: Book? { state.books.first { $0.id == state.selectedBook } }
     var active: ReaderSurface { isStealth ? miniSurface : normalSurface }
+    var canNavigateReader: Bool { !NSApp.isHidden && (isStealth ? mini : window)?.isVisible == true && !active.visuallyHidden }
     var settingsValues: [Int:NSTextField] = [:]
     var contentPanel: NSView!
     var settingsTab = 0
@@ -71,6 +72,7 @@ import ReaderCore
             else { self.revealReader(highlight:false) }
         }
         visibilityShortcut.isEnabled = { [weak self] in self?.interactionOption("ArrowVisibilityEnabled") ?? false }
+        visibilityShortcut.canNavigate = { [weak self] in self?.canNavigateReader ?? false }
         visibilityShortcut.start()
         if let i = CommandLine.arguments.firstIndex(of: "--import"), CommandLine.arguments.count > i+1 { importURL(URL(fileURLWithPath: CommandLine.arguments[i+1])) }
     }
@@ -179,6 +181,7 @@ import ReaderCore
         hoverToolbar?.onPin = { [weak self] in self?.togglePin() }
     }
     func configure(_ surface: ReaderSurface) {
+        surface.scroll.canNavigate = { [weak self] in self?.canNavigateReader ?? false }
         surface.text.turnPage = { [weak self] in self?.turnPage($0) }
         surface.text.hideReader = { [weak self] in self?.hideReader() }
         surface.text.menu = contextMenu()
@@ -290,7 +293,7 @@ import ReaderCore
     }
     @objc func toggleVisualHidden() {
         guard isStealth else { return }
-        recordPosition(); miniSurface.setVisualHidden(!miniSurface.visuallyHidden); if miniSurface.visuallyHidden { chapterPicker?.close() }; syncContrast(); syncHoverToolbar(); persist()
+        recordPosition(); miniSurface.setVisualHidden(!miniSurface.visuallyHidden); if miniSurface.visuallyHidden { visibilityShortcut.cancelPending(); chapterPicker?.close() }; syncContrast(); syncHoverToolbar(); persist()
     }
     @objc func togglePin() {
         state.preferences.floating.toggle(); mini.level = state.preferences.floating ? .floating : .normal
@@ -317,6 +320,7 @@ import ReaderCore
         recordPosition(); updateProgress(); if settings != nil { rebuildSettings() }; persist()
     }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if [#selector(previousPage),#selector(nextPage),#selector(previousChapter),#selector(nextChapter)].contains(menuItem.action) { return canNavigateReader }
         if [#selector(moreTransparent),#selector(lessTransparent)].contains(menuItem.action) { return isStealth }
         return true
     }
@@ -333,7 +337,7 @@ import ReaderCore
     func scheduleSave() { saveWork?.cancel(); let work = DispatchWorkItem { [weak self] in self?.persist() }; saveWork = work; DispatchQueue.main.asyncAfter(deadline:.now()+0.35,execute:work) }
     func persist() { saveWork?.cancel(); do { try state.save(to:stateURL) } catch { showError(error) } }
     func turnPage(_ direction: Int) {
-        guard !active.visuallyHidden, let book else { return }
+        guard canNavigateReader, let book else { return }
         if active.page(direction) {
             let next = currentChapter+direction
             if book.chapters.indices.contains(next) { openChapter(next,end:direction < 0) }
@@ -341,8 +345,8 @@ import ReaderCore
     }
     @objc func nextPage() { turnPage(1) }
     @objc func previousPage() { turnPage(-1) }
-    @objc func nextChapter() { recordPosition(); openChapter(currentChapter+1) }
-    @objc func previousChapter() { recordPosition(); openChapter(currentChapter-1) }
+    @objc func nextChapter() { guard canNavigateReader else { return }; recordPosition(); openChapter(currentChapter+1) }
+    @objc func previousChapter() { guard canNavigateReader else { return }; recordPosition(); openChapter(currentChapter-1) }
     @objc func focusSearch() { if isStealth { showChapterPicker(); return }; if sidebarWidth?.constant != 0 { toggleSidebar() }; window.makeFirstResponder(search) }
     @objc func toggleStealth() {
         guard book != nil else { importBook(); return }
@@ -352,7 +356,7 @@ import ReaderCore
         else { mini.orderOut(nil); window.makeKeyAndOrderFront(nil); window.makeFirstResponder(normalSurface.text) }
         updateProgress(); syncContrast(); syncHoverToolbar(); if settings != nil { rebuildSettings() }; persist(); NSApp.activate(ignoringOtherApps:true)
     }
-    @objc func hideReader() { active.locator.cancel(); hoverToolbar?.stop(); chapterPicker?.close(); contrast.stop(); recordPosition(); persist(); (isStealth ? mini : window)?.orderOut(nil); settings?.orderOut(nil) }
+    @objc func hideReader() { visibilityShortcut.cancelPending(); active.locator.cancel(); hoverToolbar?.stop(); chapterPicker?.close(); contrast.stop(); recordPosition(); persist(); (isStealth ? mini : window)?.orderOut(nil); settings?.orderOut(nil) }
     @objc func closeWindow() { hideReader() }
     @objc func showReader() { revealReader(highlight:true) }
     func revealReader(highlight:Bool) {

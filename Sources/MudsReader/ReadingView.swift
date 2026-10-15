@@ -29,12 +29,14 @@ final class StealthWindow: NSWindow {
 }
 
 final class ReadingScrollView: NSScrollView {
+    var canNavigate: () -> Bool = { true }
     var paged = true
     var turnPage: ((Int) -> Void)?
     private var accumulated: CGFloat = 0
     private var gestureTurned = false
     private var lastWheelTurn: TimeInterval = -.infinity
     override func scrollWheel(with event: NSEvent) {
+        guard canNavigate() else { return }
         guard paged else { super.scrollWheel(with:event); return }
         // A trackpad gesture advances once; inertial events must not skip more pages.
         if !event.momentumPhase.isEmpty { return }

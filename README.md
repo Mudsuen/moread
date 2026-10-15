@@ -62,7 +62,7 @@ Settings follow the system appearance and stay at full brightness. Reading theme
 | **Local reading history** | Automatically save the selected book, chapter, source-text position, preferences, and window geometry. |
 | **Searchable contents** | Browse EPUB chapter titles without leaving the compact reader. |
 
-Resizing retains the current page's first source character. Visual concealment preserves your opacity settings and reading position. Opening moread from the Dock or menu bar brings the reader forward with brief location feedback.
+Resizing retains the current page's first source character. Visual concealment preserves your opacity settings and reading position. Hidden windows and visually concealed content reject paging, scrolling, and chapter-navigation commands; queued arrow events are cancelled when hiding. Opening moread from the Dock or menu bar brings the reader forward with brief location feedback.
 
 ## Requirements
 

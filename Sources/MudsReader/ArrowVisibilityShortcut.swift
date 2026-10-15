@@ -11,6 +11,7 @@ struct ArrowChord {
 
 @MainActor final class ArrowVisibilityShortcut {
     var toggle: (() -> Void)?
+    var canNavigate: () -> Bool = { true }
     var isEnabled: () -> Bool = { true }
     private var chord = ArrowChord()
     private var timer: Timer?
@@ -24,6 +25,7 @@ struct ArrowChord {
             guard let self, self.isEnabled(), !self.forwarding, event.keyCode == 123 || event.keyCode == 124 else { return event }
             self.check()
             if self.suppressArrows { return nil }
+            guard self.canNavigate() else { return event }
             guard event.modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty else { return event }
             if event.type == .keyUp { self.flush(); return event }
             if event.isARepeat { return event }
@@ -47,8 +49,10 @@ struct ArrowChord {
     private func flush() {
         delivery?.cancel(); delivery = nil
         guard let event = pending else { return }; pending = nil
+        guard canNavigate() else { return }
         forwarding = true; NSApp.sendEvent(event); forwarding = false
     }
+    func cancelPending() { delivery?.cancel(); delivery = nil; pending = nil }
     func stop() {
         timer?.invalidate(); timer = nil; delivery?.cancel(); pending = nil
         if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil

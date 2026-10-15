@@ -376,4 +376,28 @@ final class ReaderUITests: XCTestCase {
         }
     }
 
+    func testHiddenReaderRejectsNavigationAndMenuCommands() {
+        MainActor.assumeIsolated {
+            _ = NSApplication.shared
+            let app = ReaderApp(); app.isStealth = true
+            app.mini = StealthWindow(contentRect:NSRect(x:100,y:100,width:240,height:130),styleMask:[.borderless],backing:.buffered,defer:false)
+            app.mini.isReleasedWhenClosed = false
+            app.mini.contentView = app.miniSurface
+            XCTAssertFalse(app.canNavigateReader)
+            app.mini.orderFront(nil)
+            XCTAssertTrue(app.canNavigateReader)
+            app.miniSurface.setVisualHidden(true)
+            XCTAssertFalse(app.canNavigateReader)
+            app.miniSurface.setVisualHidden(false)
+            XCTAssertTrue(app.canNavigateReader)
+            app.mini.orderOut(nil)
+            for action in [#selector(ReaderApp.nextPage),#selector(ReaderApp.previousPage),#selector(ReaderApp.nextChapter),#selector(ReaderApp.previousChapter)] {
+                let item = NSMenuItem(title:"",action:action,keyEquivalent:"")
+                XCTAssertFalse(app.validateMenuItem(item))
+            }
+            app.currentChapter = 4; app.nextChapter(); app.previousChapter(); app.nextPage(); app.previousPage()
+            XCTAssertEqual(app.currentChapter,4)
+        }
+    }
+
 }
