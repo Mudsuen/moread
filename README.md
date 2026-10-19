@@ -53,7 +53,7 @@ Settings follow the system appearance and stay at full brightness. Reading theme
 | --- | --- |
 | **Two reading windows** | Switch between a library-backed reader and a compact, draggable, resizable window. |
 | **Text-only transparency** | Adjust background and text opacity separately. Remove the background completely while keeping the words visible. |
-| **Adaptive text color** | Optionally choose dark or light text from the actual background beneath each visible glyph, including mixed backgrounds. |
+| **Adaptive text color** | Optionally choose dark or light text uniformly from the background beneath the entire reading window. |
 | **Pages or continuous scrolling** | Use contiguous text pages without repeated content, or scroll within a chapter. |
 | **Independent typography** | Keep separate font size, typeface, line height, and paragraph spacing for each window mode. Preview Songti, system, Kaiti, and monospaced fonts. |
 | **Light, dark, or system appearance** | Set the theme independently of app-local brightness. |
@@ -144,7 +144,7 @@ Original EPUBs and the Apple Books database are never edited. There is no cloud 
 
 **Adaptive contrast is optional.** ScreenCaptureKit requests only the reader's region on its current display and excludes moread itself. Captured pixels remain in memory: they are not recorded, saved, or uploaded, and audio is not requested. Sampling stops when adaptation is disabled, the background is opaque, normal mode is active, or the reader is hidden.
 
-Local background medians and a small switching threshold reduce incorrect colors and flicker. Old-position captures are discarded after window movement, and temporary capture failures retain the last valid colors. Highly detailed or rapidly changing backgrounds can still reduce readability; an opaque background remains available in settings.
+A whole-window background median and a small switching threshold reduce incorrect colors and flicker. Old-position captures are discarded after window movement, and temporary capture failures retain the last valid colors. Highly detailed or rapidly changing backgrounds can still reduce readability; an opaque background remains available in settings.
 
 ## Scope and limitations
 
@@ -179,3 +179,5 @@ Do not commit copyrighted books, personal reading records, screenshots containin
 ## License
 
 [MIT](LICENSE). The license covers this project's code and original assets, not books imported into the application.
+
+Compact text uses one color throughout each page. Lowering its brightness moves both light and dark text toward gray, independently of text opacity. Settings remain unaffected.

@@ -303,7 +303,7 @@ final class ReaderUITests: XCTestCase {
         let transparent = CGContext(data:nil,width:10,height:10,bitsPerComponent:8,bytesPerRow:40,space:CGColorSpace(name:CGColorSpace.sRGB)!,bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!.makeImage()!
         XCTAssertNil(BackgroundContrast.sample(of:transparent,windowFrame:frame,captureFrame:frame),"Missing pixels must not be treated as a black background")
     }
-    func testLocalContrastFollowsGlyphPositionsAndPreservesReadingAnchor() {
+    func testUniformContrastAcrossMixedBackgroundPreservesReadingAnchor() {
         _ = NSApplication.shared
         let window = StealthWindow(contentRect:NSRect(x:100,y:100,width:240,height:130),styleMask:[.borderless],backing:.buffered,defer:false); window.isReleasedWhenClosed = false
         let view = ReaderSurface(frame:NSRect(x:0,y:0,width:240,height:130)); window.contentView = view
@@ -314,10 +314,10 @@ final class ReaderUITests: XCTestCase {
         let sample = BackgroundSample(windowFrame:window.frame,captureFrame:window.frame,width:240,height:130,luminance:values)
         view.applyAdaptiveColor(true); view.applyBackgroundSample(sample)
         func white(at index:Int) -> Double { (view.text.textStorage!.attribute(.foregroundColor,at:index,effectiveRange:nil) as! NSColor).usingColorSpace(.genericGray)!.whiteComponent }
-        XCTAssertLessThan(white(at:0),0.1); XCTAssertGreaterThan(white(at:14),0.9)
+        XCTAssertLessThan(white(at:0),0.1); XCTAssertLessThan(white(at:14),0.1)
         XCTAssertEqual(view.visibleCharacter(),anchor)
         _ = view.page(1)
-        XCTAssertLessThan(white(at:0),0.1); XCTAssertGreaterThan(white(at:14),0.9)
+        XCTAssertLessThan(white(at:0),0.1); XCTAssertLessThan(white(at:14),0.1)
         let nextAnchor = view.visibleCharacter()
         let dark = BackgroundSample(windowFrame:window.frame,captureFrame:window.frame,width:1,height:1,luminance:[0])
         view.applyBackgroundSample(dark); XCTAssertGreaterThan(white(at:0),0.9)
@@ -397,6 +397,20 @@ final class ReaderUITests: XCTestCase {
             }
             app.currentChapter = 4; app.nextChapter(); app.previousChapter(); app.nextPage(); app.previousPage()
             XCTAssertEqual(app.currentChapter,4)
+        }
+    }
+
+    func testBrightnessChangesBothTextColorsWithoutChangingOpacity() {
+        _ = NSApplication.shared
+        for dark in [false,true] {
+            let view = ReaderSurface(frame:NSRect(x:0,y:0,width:240,height:100))
+            func render(_ brightness:Double) -> Double {
+                view.display("亮度测试",fontSize:12,brightness:brightness,stealth:true,character:0,dark:dark,fontName:"system",lineHeight:1.15,paragraphSpacing:0,margin:48,backgroundOpacity:0,textOpacity:0.6)
+                XCTAssertEqual(view.foregroundColor.alphaComponent,0.6)
+                return view.foregroundColor.usingColorSpace(.genericGray)!.whiteComponent
+            }
+            let full = render(1), dim = render(0)
+            if dark { XCTAssertLessThan(dim,full-0.25) } else { XCTAssertGreaterThan(dim,full+0.2) }
         }
     }
 
