@@ -82,4 +82,12 @@ final class ReaderCoreTests: XCTestCase {
         XCTAssertFalse(ContrastMath.prefersWhite(backgroundLuminance:0.18,brightness:1,textOpacity:1,previous:false))
     }
 
+    func testTextBrightnessMultipliesOpacityAndClamps() {
+        XCTAssertEqual(ContrastMath.textAlpha(brightness:0,opacity:1),0)
+        XCTAssertEqual(ContrastMath.textAlpha(brightness:0.5,opacity:0.6),0.3,accuracy:0.0001)
+        XCTAssertEqual(ContrastMath.textAlpha(brightness:1,opacity:0.6),0.6)
+        XCTAssertEqual(ContrastMath.textAlpha(brightness:-1,opacity:2),0)
+        XCTAssertEqual(ContrastMath.textAlpha(brightness:2,opacity:2),1)
+    }
+
 }

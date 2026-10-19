@@ -96,7 +96,7 @@ final class ReaderUITests: XCTestCase {
     func testFullTransparencyOnlyClearsBackground() {
         _ = NSApplication.shared
         let view = ReaderSurface(frame:NSRect(x:0,y:0,width:360,height:150))
-        view.display("只显示清晰文字",fontSize:11,brightness:0,stealth:true,character:0,dark:true,fontName:"system",lineHeight:1.15,paragraphSpacing:0,margin:48,backgroundOpacity:0)
+        view.display("只显示清晰文字",fontSize:11,brightness:1,stealth:true,character:0,dark:true,fontName:"system",lineHeight:1.15,paragraphSpacing:0,margin:48,backgroundOpacity:0)
         XCTAssertEqual(view.layer!.backgroundColor!.alpha,0)
         let foreground = view.text.textStorage!.attribute(.foregroundColor,at:0,effectiveRange:nil) as! NSColor
         XCTAssertEqual(foreground.alphaComponent,1)
@@ -225,7 +225,7 @@ final class ReaderUITests: XCTestCase {
         view.setVisualHidden(false)
         XCTAssertEqual(view.scroll.alphaValue,1); XCTAssertEqual(view.layer?.backgroundColor,paint); XCTAssertFalse(view.interaction.visuallyHidden)
         XCTAssertEqual(view.displayedRange,range); XCTAssertEqual(view.text.string,text)
-        XCTAssertEqual((view.text.textStorage!.attribute(.foregroundColor,at:0,effectiveRange:nil) as! NSColor).alphaComponent,0.6)
+        XCTAssertEqual((view.text.textStorage!.attribute(.foregroundColor,at:0,effectiveRange:nil) as! NSColor).alphaComponent,0.48,accuracy:0.0001)
     }
 
     func testBorderlessWindowRestoresSavedDimensionsAndOrigin() {
@@ -400,17 +400,17 @@ final class ReaderUITests: XCTestCase {
         }
     }
 
-    func testBrightnessChangesBothTextColorsWithoutChangingOpacity() {
+    func testBrightnessFadesBothTextColorsWithoutChangingTheirColor() {
         _ = NSApplication.shared
         for dark in [false,true] {
             let view = ReaderSurface(frame:NSRect(x:0,y:0,width:240,height:100))
             func render(_ brightness:Double) -> Double {
                 view.display("亮度测试",fontSize:12,brightness:brightness,stealth:true,character:0,dark:dark,fontName:"system",lineHeight:1.15,paragraphSpacing:0,margin:48,backgroundOpacity:0,textOpacity:0.6)
-                XCTAssertEqual(view.foregroundColor.alphaComponent,0.6)
+                XCTAssertEqual(view.foregroundColor.alphaComponent,0.6*brightness,accuracy:0.0001)
                 return view.foregroundColor.usingColorSpace(.genericGray)!.whiteComponent
             }
             let full = render(1), dim = render(0)
-            if dark { XCTAssertLessThan(dim,full-0.25) } else { XCTAssertGreaterThan(dim,full+0.2) }
+            XCTAssertEqual(dim,full,accuracy:0.0001)
         }
     }
 

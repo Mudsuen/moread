@@ -180,4 +180,4 @@ Do not commit copyrighted books, personal reading records, screenshots containin
 
 [MIT](LICENSE). The license covers this project's code and original assets, not books imported into the application.
 
-Compact text uses one color throughout each page. Lowering its brightness moves both light and dark text toward gray, independently of text opacity. Settings remain unaffected.
+Compact text uses one color throughout each page. Lowering compact-text brightness fades both dark and light text toward transparency without changing their color. Effective text opacity is brightness multiplied by the text-opacity setting; zero brightness makes the text fully transparent. Background color selection remains independent of dimming. Settings remain unaffected.

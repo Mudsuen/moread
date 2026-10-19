@@ -143,7 +143,7 @@ final class ReaderSurface: NSView {
         let font: NSFont
         switch fontName { case "serif": font = NSFont(name:"Songti SC",size:fontSize) ?? .systemFont(ofSize:fontSize); case "kai": font = NSFont(name:"Kaiti SC",size:fontSize) ?? .systemFont(ofSize:fontSize); case "mono": font = .monospacedSystemFont(ofSize:fontSize,weight:.regular); default: font = .systemFont(ofSize:fontSize) }
         let background = stealth ? NSColor(white:(dark ? 0.025 : 0.97)*exposure,alpha:backgroundOpacity) : (dark ? .black : NSColor(white:0.97,alpha:1))
-        let foreground = stealth ? NSColor(white:ContrastMath.textWhite(adaptiveWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite,brightness:brightness),alpha:textOpacity) : (dark ? NSColor(calibratedWhite:0.92,alpha:1) : NSColor(white:0.18,alpha:1))
+        let foreground = stealth ? NSColor(white:(adaptiveWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite),alpha:ContrastMath.textAlpha(brightness:brightness,opacity:textOpacity)) : (dark ? NSColor(calibratedWhite:0.92,alpha:1) : NSColor(white:0.18,alpha:1))
         readingBackground = background.cgColor
         layer?.backgroundColor = visuallyHidden ? NSColor.clear.cgColor : readingBackground
         foregroundColor = foreground
@@ -225,7 +225,7 @@ final class ReaderSurface: NSView {
     func applyAdaptiveColor(_ prefersWhite:Bool?) {
         guard stealth, adaptiveWhite != prefersWhite else { return }
         adaptiveWhite = prefersWhite
-        let color = NSColor(white:ContrastMath.textWhite(prefersWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite,brightness:brightness),alpha:textOpacity)
+        let color = NSColor(white:(prefersWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite),alpha:ContrastMath.textAlpha(brightness:brightness,opacity:textOpacity))
         foregroundColor = color
         let updated = NSMutableAttributedString(attributedString:source)
         updated.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:updated.length)); source = updated
