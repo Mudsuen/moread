@@ -75,6 +75,7 @@ final class ReaderSurface: NSView {
     private var lastSize = NSSize.zero
     private var changing = false
     private var source = NSAttributedString(string:"")
+    private var layoutInputs: ReaderLayoutInputs?
     private(set) var pageRanges: [NSRange] = []
     private(set) var pageIndex = 0
     private(set) var mode: ReadingMode = .paged
@@ -127,6 +128,8 @@ final class ReaderSurface: NSView {
         text.frame.size.height = max(scroll.contentSize.height,layout.usedRect(for:container).height+text.textContainerInset.height*2+8)
     }
     func display(_ string:String,fontSize:CGFloat,brightness:Double,stealth:Bool,character:Int,dark:Bool,fontName:String,lineHeight:Double,paragraphSpacing:Double,margin:Double,mode:ReadingMode = .paged,backgroundOpacity:Double = 1,textOpacity:Double = 1,adaptiveText:Bool = false) {
+        let inputs = ReaderLayoutInputs(text:string,fontSize:fontSize,stealth:stealth,fontName:fontName,
+                                        lineHeight:lineHeight,paragraphSpacing:paragraphSpacing,margin:margin,mode:mode)
         changing = true; self.textOpacity = textOpacity; exposure = stealth ? ContrastMath.exposure(brightness) : 1
         self.brightness = brightness; self.backgroundOpacity = backgroundOpacity
         adaptiveEnabled = adaptiveText && stealth && backgroundOpacity < 1
@@ -134,18 +137,29 @@ final class ReaderSurface: NSView {
         if !adaptiveEnabled { backgroundSample = nil }
         baseWhite = dark ? 0.96 : 0.12
         if !adaptiveText || !stealth || backgroundOpacity >= 1 { adaptiveWhite = nil }
+        interaction.clearBackground = backgroundOpacity == 0
+        let background = stealth ? NSColor(white:(dark ? 0.025 : 0.97)*exposure,alpha:backgroundOpacity) : (dark ? .black : NSColor(white:0.97,alpha:1))
+        let foreground = stealth ? NSColor(white:(adaptiveWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite),alpha:ContrastMath.textAlpha(brightness:brightness,opacity:textOpacity)) : (dark ? NSColor(calibratedWhite:0.92,alpha:1) : NSColor(white:0.18,alpha:1))
+        readingBackground = background.cgColor
+        layer?.backgroundColor = visuallyHidden ? NSColor.clear.cgColor : readingBackground
+        if layoutInputs == inputs, character == visibleCharacter() {
+            // Color and opacity do not change glyph geometry. Preserve pagination,
+            // the reading anchor and selection instead of replacing the chapter.
+            updateForegroundColor(foreground)
+            changing = false
+            layoutSubtreeIfNeeded()
+            applyUniformContrast()
+            return
+        }
+        layoutInputs = inputs
         self.mode = mode; self.stealth = stealth; text.stealth = stealth; readingMargin = margin
-        interaction.isHidden = !stealth; interaction.clearBackground = backgroundOpacity == 0
+        interaction.isHidden = !stealth
         scroll.paged = mode == .paged; scroll.hasVerticalScroller = !stealth && mode == .scrolling
         text.isSelectable = !stealth; text.isVerticallyResizable = mode == .scrolling
         text.textContainerInset = NSSize(width:stealth ? 10 : margin,height:stealth ? 7 : 24)
         let paragraph = NSMutableParagraphStyle(); paragraph.lineHeightMultiple = lineHeight; paragraph.paragraphSpacing = paragraphSpacing; paragraph.lineBreakMode = .byWordWrapping
         let font: NSFont
         switch fontName { case "serif": font = NSFont(name:"Songti SC",size:fontSize) ?? .systemFont(ofSize:fontSize); case "kai": font = NSFont(name:"Kaiti SC",size:fontSize) ?? .systemFont(ofSize:fontSize); case "mono": font = .monospacedSystemFont(ofSize:fontSize,weight:.regular); default: font = .systemFont(ofSize:fontSize) }
-        let background = stealth ? NSColor(white:(dark ? 0.025 : 0.97)*exposure,alpha:backgroundOpacity) : (dark ? .black : NSColor(white:0.97,alpha:1))
-        let foreground = stealth ? NSColor(white:(adaptiveWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite),alpha:ContrastMath.textAlpha(brightness:brightness,opacity:textOpacity)) : (dark ? NSColor(calibratedWhite:0.92,alpha:1) : NSColor(white:0.18,alpha:1))
-        readingBackground = background.cgColor
-        layer?.backgroundColor = visuallyHidden ? NSColor.clear.cgColor : readingBackground
         foregroundColor = foreground
         let attributed = NSMutableAttributedString(string:string,attributes:[.font:font,.foregroundColor:foreground,.paragraphStyle:paragraph])
         // Keep UTF-16 offsets stable while making paragraph spacing independent of blank lines.
@@ -226,6 +240,10 @@ final class ReaderSurface: NSView {
         guard stealth, adaptiveWhite != prefersWhite else { return }
         adaptiveWhite = prefersWhite
         let color = NSColor(white:(prefersWhite.map { $0 ? 0.98 : 0.06 } ?? baseWhite),alpha:ContrastMath.textAlpha(brightness:brightness,opacity:textOpacity))
+        updateForegroundColor(color)
+    }
+    private func updateForegroundColor(_ color: NSColor) {
+        guard foregroundColor != color else { return }
         foregroundColor = color
         let updated = NSMutableAttributedString(attributedString:source)
         updated.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:updated.length)); source = updated
@@ -277,5 +295,25 @@ final class ReaderSurface: NSView {
         if mode == .paged { pageIndex = max(0,pageRanges.count-1); showCurrentPage(); didScroll?(); return }
         scroll.contentView.scroll(to:NSPoint(x:0,y:max(0,text.frame.height-scroll.contentSize.height)))
         scroll.reflectScrolledClipView(scroll.contentView); anchor = visibleCharacter(); didScroll?()
+    }
+}
+
+private struct ReaderLayoutInputs: Equatable {
+    var text: String
+    var fontSize: CGFloat
+    var stealth: Bool
+    var fontName: String
+    var lineHeight: Double
+    var paragraphSpacing: Double
+    var margin: Double
+    var mode: ReadingMode
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.fontSize == rhs.fontSize && lhs.stealth == rhs.stealth && lhs.fontName == rhs.fontName
+            && lhs.lineHeight == rhs.lineHeight && lhs.paragraphSpacing == rhs.paragraphSpacing
+            && lhs.margin == rhs.margin && lhs.mode == rhs.mode
+            // Swift String equality folds canonically equivalent spellings; the reader
+            // must preserve the exact source sequence and its UTF-16 reading offsets.
+            && lhs.text.utf8.elementsEqual(rhs.text.utf8)
     }
 }

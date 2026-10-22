@@ -10,6 +10,14 @@ if CommandLine.arguments.contains("--verify-book"), let i = CommandLine.argument
         exit(0)
     } catch { fputs("Verification failed: \(error)\n", stderr); exit(1) }
 }
+if CommandLine.arguments.contains("--verify-appearance") {
+    do {
+        let directory = try ReaderAppearanceVerification.fixtureDirectory(arguments: CommandLine.arguments)
+        let result = try MainActor.assumeIsolated { try ReaderAppearanceVerification.run(directory: directory) }
+        print(result)
+        exit(0)
+    } catch { fputs("Verification failed: \(error)\n", stderr); exit(1) }
+}
 let app = NSApplication.shared
 MainActor.assumeIsolated {
     let delegate = ReaderApp()
