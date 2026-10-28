@@ -57,6 +57,8 @@ final class ReaderSurface: NSView {
     let text = ReadingTextView()
     let interaction = StealthInteraction(frame:.zero)
     let locator = WindowLocator(frame:.zero)
+    let previousPageButton = FloatingCircleButton(frame:.zero)
+    let nextPageButton = FloatingCircleButton(frame:.zero)
     var toggleVisualVisibility: (() -> Void)?
     private(set) var visuallyHidden = false
     private var readingBackground: CGColor?
@@ -91,6 +93,12 @@ final class ReaderSurface: NSView {
         text.isHorizontallyResizable = false; text.isVerticallyResizable = true
         text.autoresizingMask = [.width]; text.textContainer?.widthTracksTextView = true; text.textContainer?.lineFragmentPadding = 0
         scroll.documentView = text; addSubview(scroll); addSubview(interaction); addSubview(locator)
+        for (button,direction,label,symbol) in [(previousPageButton,-1,"上一页","chevron.left"),(nextPageButton,1,"下一页","chevron.right")] {
+            button.title = ""; button.isBordered = false; button.symbol = symbol
+            button.tag = direction; button.target = self; button.action = #selector(clickPage(_:))
+            button.toolTip = label; button.setAccessibilityLabel(label); button.isHidden = true
+            addSubview(button)
+        }
         interaction.isHidden = true
         interaction.contextMenu = { [weak self] in self?.text.menu }
         interaction.turnPage = { [weak self] in self?.scroll.scrollWheel(with:$0) }
@@ -104,6 +112,17 @@ final class ReaderSurface: NSView {
         }
         setAccessibilityLabel("阅读正文"); text.setAccessibilityLabel("阅读正文")
     }
+    @objc private func clickPage(_ sender:NSButton) {
+        guard !visuallyHidden, source.length > 0, scroll.canNavigate() else { return }
+        text.turnPage?(sender.tag)
+    }
+    private func updatePageButtons() {
+        for button in [previousPageButton,nextPageButton] {
+            button.isHidden = visuallyHidden || source.length == 0
+            button.foreground = foregroundColor
+            button.alphaValue = foregroundColor.alphaComponent
+        }
+    }
     required init?(coder:NSCoder) { fatalError() }
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     override func layout() {
@@ -111,7 +130,11 @@ final class ReaderSurface: NSView {
         changing = true
         super.layout(); scroll.frame = bounds; interaction.frame = bounds; locator.frame = bounds
         let size = scroll.contentSize
-        text.textContainerInset.width = stealth ? 10 : min(readingMargin,max(16,size.width*0.16))
+        // Leave the outer 9 points available for compact-window resizing.
+        let buttonHeight = min(32,max(0,bounds.height-32))
+        previousPageButton.frame = NSRect(x:10,y:(bounds.height-buttonHeight)/2,width:18,height:buttonHeight)
+        nextPageButton.frame = NSRect(x:bounds.width-28,y:(bounds.height-buttonHeight)/2,width:18,height:buttonHeight)
+        text.textContainerInset.width = stealth ? 32 : max(32,min(readingMargin,max(16,size.width*0.16)))
         text.frame.size.width = max(20,size.width)
         text.textContainer?.containerSize = NSSize(width:max(10,size.width-text.textContainerInset.width*2),height:.greatestFiniteMagnitude)
         if lastSize != size {
@@ -171,6 +194,7 @@ final class ReaderSurface: NSView {
             let next = NSMaxRange(found); remaining = NSRange(location:next,length:ns.length-next)
         }
         source = attributed
+        updatePageButtons()
         if mode == .scrolling { text.textStorage?.setAttributedString(source) }
         anchor = character; lastSize = .zero
         changing = false; needsLayout = true; layoutSubtreeIfNeeded(); restore(character)
@@ -234,6 +258,7 @@ final class ReaderSurface: NSView {
         scroll.alphaValue = hidden ? 0 : 1
         layer?.backgroundColor = hidden ? NSColor.clear.cgColor : readingBackground
         interaction.visuallyHidden = hidden
+        updatePageButtons()
         if hidden { locator.cancel() }
     }
     func applyAdaptiveColor(_ prefersWhite:Bool?) {
@@ -245,6 +270,7 @@ final class ReaderSurface: NSView {
     private func updateForegroundColor(_ color: NSColor) {
         guard foregroundColor != color else { return }
         foregroundColor = color
+        updatePageButtons()
         let updated = NSMutableAttributedString(attributedString:source)
         updated.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:updated.length)); source = updated
         text.textStorage?.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:(text.string as NSString).length))
