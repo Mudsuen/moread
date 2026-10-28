@@ -4,6 +4,24 @@ import ReaderCore
 @testable import MudsReader
 
 final class ReaderUITests: XCTestCase {
+    @MainActor func testVisibilityChordWorksWhileNavigationIsUnavailable() {
+        let shortcut = ArrowVisibilityShortcut()
+        var toggles = 0
+        shortcut.toggle = { toggles += 1 }
+        shortcut.canNavigate = { false }
+        shortcut.check(left:true,right:false)
+        shortcut.check(left:true,right:true)
+        shortcut.check(left:true,right:true)
+        XCTAssertEqual(toggles,1)
+        shortcut.check(left:false,right:false)
+        shortcut.check(left:false,right:true)
+        shortcut.check(left:true,right:true)
+        XCTAssertEqual(toggles,2)
+        shortcut.isEnabled = { false }
+        shortcut.check(left:false,right:false)
+        shortcut.check(left:true,right:true)
+        XCTAssertEqual(toggles,2)
+    }
     func testNativePagingReflowAndStealthStructure() {
         _ = NSApplication.shared
         let view = ReaderSurface(frame:NSRect(x:0,y:0,width:360,height:150))

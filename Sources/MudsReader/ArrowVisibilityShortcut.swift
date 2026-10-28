@@ -20,10 +20,15 @@ struct ArrowChord {
     private var delivery: DispatchWorkItem?
     private var forwarding = false
     private var suppressArrows = false
+    private var localLeft = false
+    private var localRight = false
     func start() {
+        stop()
         monitor = NSEvent.addLocalMonitorForEvents(matching:[.keyDown,.keyUp]) { [weak self] event in
             guard let self, self.isEnabled(), !self.forwarding, event.keyCode == 123 || event.keyCode == 124 else { return event }
-            self.check()
+            if event.keyCode == 123 { self.localLeft = event.type == .keyDown }
+            else { self.localRight = event.type == .keyDown }
+            self.check(left:self.localLeft,right:self.localRight)
             if self.suppressArrows { return nil }
             guard self.canNavigate() else { return event }
             guard event.modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty else { return event }
@@ -38,9 +43,15 @@ struct ArrowChord {
         timer = t; RunLoop.main.add(t,forMode:.common)
     }
     private func check() {
+        // Session state can exclude arrow events swallowed by our local monitor.
+        // Use delivered events while focused, and physical HID state elsewhere.
+        if NSApp.isActive { check(left:localLeft,right:localRight); return }
+        localLeft = false; localRight = false
+        check(left:CGEventSource.keyState(.hidSystemState,key:123),
+              right:CGEventSource.keyState(.hidSystemState,key:124))
+    }
+    func check(left:Bool,right:Bool) {
         guard isEnabled() else { chord = ArrowChord(); suppressArrows = false; return }
-        let left = CGEventSource.keyState(.combinedSessionState,key:123)
-        let right = CGEventSource.keyState(.combinedSessionState,key:124)
         if !left && !right { suppressArrows = false }
         if chord.update(left:left,right:right) {
             delivery?.cancel(); delivery = nil; pending = nil; suppressArrows = true; toggle?()
@@ -55,6 +66,7 @@ struct ArrowChord {
     func cancelPending() { delivery?.cancel(); delivery = nil; pending = nil }
     func stop() {
         timer?.invalidate(); timer = nil; delivery?.cancel(); pending = nil
+        localLeft = false; localRight = false; chord = ArrowChord(); suppressArrows = false
         if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil
     }
 }
