@@ -112,7 +112,7 @@ Open Settings → **操作** (Controls) for the built-in shortcut reference and 
 
 | Action | Shortcut |
 | --- | --- |
-| Previous / next page | Click the small left / right edge arrow, or ← / ↑ and → / ↓ |
+| Previous / next page | ← or ↑ / → or ↓ |
 | Next / previous page | Space / ⇧Space |
 | Previous / next chapter | ⌘[ / ⌘] |
 | Search chapter titles | ⌘F |

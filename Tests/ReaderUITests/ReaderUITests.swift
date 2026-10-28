@@ -15,39 +15,10 @@ final class ReaderUITests: XCTestCase {
         view.restore(320); let beforeResize = view.visibleCharacter()
         view.frame.size.width = 250; view.needsLayout = true; view.layoutSubtreeIfNeeded()
         XCTAssertEqual(view.visibleCharacter(),beforeResize)
-        XCTAssertEqual(view.subviews.count,5); XCTAssertTrue(view.locator.isHidden); XCTAssertFalse(view.interaction.isHidden); XCTAssertFalse(view.scroll.hasVerticalScroller)
+        XCTAssertEqual(view.subviews.count,3); XCTAssertTrue(view.locator.isHidden); XCTAssertFalse(view.interaction.isHidden); XCTAssertFalse(view.scroll.hasVerticalScroller)
         XCTAssertFalse(view.text.isEditable); XCTAssertFalse(view.text.isSelectable)
         XCTAssertEqual(view.layer?.backgroundColor?.alpha,1)
         view.goToEnd(); XCTAssertTrue(view.page(1))
-    }
-    func testMousePageButtonsRespectNavigationAndConcealment() {
-        _ = NSApplication.shared
-        for stealth in [true,false] {
-            let view = ReaderSurface(frame:NSRect(x:0,y:0,width:360,height:150))
-            view.display(String(repeating:"鼠标翻页测试。",count:100),fontSize:11,brightness:1,stealth:stealth,character:0,dark:false,fontName:"system",lineHeight:1.15,paragraphSpacing:0,margin:48,backgroundOpacity:0)
-            var directions: [Int] = []
-            view.text.turnPage = { directions.append($0); _ = view.page($0) }
-            view.nextPageButton.performClick(nil)
-            XCTAssertGreaterThan(view.visibleCharacter(),0)
-            view.previousPageButton.performClick(nil)
-            XCTAssertEqual(view.visibleCharacter(),0)
-            XCTAssertEqual(directions, [1,-1])
-            XCTAssertGreaterThan(view.previousPageButton.frame.minX,view.interaction.edgeWidth)
-            XCTAssertLessThan(view.nextPageButton.frame.maxX,view.bounds.width-view.interaction.edgeWidth)
-            XCTAssertLessThan(view.previousPageButton.frame.maxX,view.text.textContainerInset.width)
-            XCTAssertFalse(view.previousPageButton.isBordered)
-            view.scroll.canNavigate = { false }
-            view.nextPageButton.performClick(nil)
-            XCTAssertEqual(directions, [1,-1])
-            view.scroll.canNavigate = { true }
-            view.setVisualHidden(true)
-            XCTAssertTrue(view.previousPageButton.isHidden)
-            XCTAssertTrue(view.nextPageButton.isHidden)
-            view.nextPageButton.performClick(nil)
-            XCTAssertEqual(directions, [1,-1])
-            view.setVisualHidden(false)
-            XCTAssertFalse(view.nextPageButton.isHidden)
-        }
     }
     func testNormalMarginAndParagraphStyling() {
         _ = NSApplication.shared
