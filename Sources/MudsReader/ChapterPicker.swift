@@ -1,7 +1,7 @@
 import AppKit
 import ReaderCore
 
-private final class ChapterTable: NSTableView {
+final class ChapterTable: NSTableView {
     var activateSelection: (() -> Void)?
     override func keyDown(with event:NSEvent) { if event.keyCode == 36 || event.keyCode == 76 { activateSelection?() } else { super.keyDown(with:event) } }
 }

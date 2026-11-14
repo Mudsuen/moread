@@ -6,7 +6,7 @@ import ReaderCore
     var window: NSWindow!
     var mini: StealthWindow!
     let normalSurface = ReaderSurface(frame: .zero), miniSurface = ReaderSurface(frame: .zero)
-    let table = NSTableView(), search = NSSearchField(), bookPicker = NSPopUpButton()
+    let table = ChapterTable(), search = NSSearchField(), bookPicker = NSPopUpButton()
     let titleLabel = NSTextField(labelWithString: "moread"), subtitleLabel = NSTextField(labelWithString: "本地阅读 · 自在留白")
     let progressLabel = NSTextField(labelWithString: ""), chapterLabel = NSTextField(labelWithString: "")
     var state = LibraryState(), currentChapter = 0, currentText = "", filtered: [Int] = []
@@ -14,10 +14,16 @@ import ReaderCore
     var restoringWindows = true
     var settings: NSPanel?, statusItem: NSStatusItem!, saveWork: DispatchWorkItem?
     let support: URL
+    private(set) var libraryLoaded = false
+    private(set) var displayedBookID: String?
     var stateURL: URL { support.appendingPathComponent("library.json") }
     var book: Book? { state.books.first { $0.id == state.selectedBook } }
     var active: ReaderSurface { isStealth ? miniSurface : normalSurface }
     var canNavigateReader: Bool { !NSApp.isHidden && (isStealth ? mini : window)?.isVisible == true && !active.visuallyHidden }
+    var readerHasKeyboardFocus: Bool { acceptsPageKeys(in:NSApp.keyWindow) }
+    func acceptsPageKeys(in keyWindow:NSWindow?) -> Bool {
+        canNavigateReader && keyWindow === (isStealth ? mini : window) && keyWindow?.firstResponder === active.text
+    }
     var settingsValues: [Int:NSTextField] = [:]
     var contentPanel: NSView!
     var settingsTab = 0
@@ -28,14 +34,16 @@ import ReaderCore
     var adaptiveStatusLabel: NSTextField?
     var permissionButton: NSButton?
     var lastBackgroundSample: BackgroundSample?
-    var lastAdaptiveWhite: Bool?
     var sidebarWidth: NSLayoutConstraint?
     var hoverToolbar: HoverToolbar?
     var chapterPicker: ChapterPicker?
     var appearanceObserver: NSObjectProtocol?
     var dark: Bool { state.preferences.theme == "dark" || (state.preferences.theme == "system" && NSApp.effectiveAppearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua) }
-    override init() {
-        support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("MudsReader")
+    override convenience init() {
+        self.init(support: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("MudsReader"))
+    }
+    init(support: URL) {
+        self.support = support
         super.init()
         contrast.onSample = { [weak self] sample in self?.lastBackgroundSample = sample; self?.applyContrast() }
         contrast.onStatus = { [weak self] status in
@@ -47,11 +55,16 @@ import ReaderCore
             self?.refreshContrastStatus()
         }
     }
+    func loadLibrary() throws {
+        libraryLoaded = false
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        let loaded = FileManager.default.fileExists(atPath: stateURL.path) ? try LibraryState.load(from: stateURL) : LibraryState()
+        state = loaded
+        libraryLoaded = true
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        do {
-            try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: stateURL.path) { state = try LibraryState.load(from: stateURL) }
-        } catch { showError(error) }
+        do { try loadLibrary() }
+        catch { showError(error); NSApp.terminate(nil); return }
         applyAppearance(); buildMenus(); buildWindow(); buildMini(); applyAppearance(); restoringWindows = false; refreshLibrary()
         isStealth = UserDefaults.standard.bool(forKey:"StealthMode")
         appearanceObserver = DistributedNotificationCenter.default().addObserver(forName:NSNotification.Name("AppleInterfaceThemeChangedNotification"),object:nil,queue:.main) { [weak self] _ in
@@ -72,7 +85,7 @@ import ReaderCore
             else { self.revealReader(highlight:false) }
         }
         visibilityShortcut.isEnabled = { [weak self] in self?.interactionOption("ArrowVisibilityEnabled") ?? false }
-        visibilityShortcut.canNavigate = { [weak self] in self?.canNavigateReader ?? false }
+        visibilityShortcut.canNavigate = { [weak self] in self?.readerHasKeyboardFocus ?? false }
         visibilityShortcut.start()
         if let i = CommandLine.arguments.firstIndex(of: "--import"), CommandLine.arguments.count > i+1 { importURL(URL(fileURLWithPath: CommandLine.arguments[i+1])) }
     }
@@ -82,7 +95,7 @@ import ReaderCore
     func windowWillClose(_ notification: Notification) { recordPosition(); persist() }
     func windowDidMove(_ notification:Notification) { if !restoringWindows, (notification.object as? NSWindow) === mini { mini.saveFrame(usingName:"StealthReaderWindow"); syncContrast(); syncHoverToolbar() } }
     func windowDidResize(_ notification:Notification) { if !restoringWindows, (notification.object as? NSWindow) === mini { mini.saveFrame(usingName:"StealthReaderWindow"); syncContrast(); syncHoverToolbar() }; updateProgress() }
-    func applicationDidHide(_ notification:Notification) { contrast.stop(); hoverToolbar?.stop(); chapterPicker?.close() }
+    func applicationDidHide(_ notification:Notification) { contrast.stop(); hoverToolbar?.stop(); miniSurface.interaction.setHoverTracking(false); chapterPicker?.close() }
     func applicationDidUnhide(_ notification:Notification) { syncContrast(); syncHoverToolbar() }
     func windowDidResignKey(_ notification: Notification) { recordPosition(); persist() }
     func application(_ sender: NSApplication, openFiles filenames: [String]) { if let file = filenames.first { importURL(URL(fileURLWithPath:file)) }; sender.reply(toOpenOrPrint: .success) }
@@ -98,6 +111,11 @@ import ReaderCore
         let appItem = NSMenuItem(); appItem.submenu = appMenu; main.addItem(appItem)
         let fileMenu = NSMenu(title:"文件"); fileMenu.addItem(makeItem("导入 EPUB…",#selector(importBook),key:"o")); fileMenu.addItem(makeItem("从 Apple Books 导入…",#selector(importFromBooks))); fileMenu.addItem(.separator()); fileMenu.addItem(makeItem("显示阅读器",#selector(showReader))); fileMenu.addItem(makeItem("关闭窗口",#selector(closeWindow),key:"w"))
         let file = NSMenuItem(); file.submenu = fileMenu; main.addItem(file)
+        let editMenu = NSMenu(title:"编辑")
+        for (title,action,key) in [("剪切",#selector(NSText.cut(_:)),"x"),("复制",#selector(NSText.copy(_:)),"c"),("粘贴",#selector(NSText.paste(_:)),"v"),("全选",#selector(NSText.selectAll(_:)),"a")] {
+            editMenu.addItem(NSMenuItem(title:title,action:action,keyEquivalent:key))
+        }
+        let edit = NSMenuItem(); edit.submenu = editMenu; main.addItem(edit)
         let reading = NSMenu(title:"阅读"); reading.addItem(makeItem("切换摸鱼模式",#selector(toggleStealth),key:"m",modifiers:[.command,.shift])); reading.addItem(makeItem("上一页",#selector(previousPage),key:String(UnicodeScalar(NSLeftArrowFunctionKey)!),modifiers:[])); reading.addItem(makeItem("下一页",#selector(nextPage),key:String(UnicodeScalar(NSRightArrowFunctionKey)!),modifiers:[])); reading.addItem(.separator()); reading.addItem(makeItem("上一章",#selector(previousChapter),key:"[")); reading.addItem(makeItem("下一章",#selector(nextChapter),key:"]")); reading.addItem(makeItem("搜索目录",#selector(focusSearch),key:"f")); reading.addItem(.separator()); reading.addItem(makeItem("放大文字",#selector(larger),key:"=")); reading.addItem(makeItem("缩小文字",#selector(smaller),key:"-"))
         let plus = makeItem("放大文字",#selector(larger),key:"+"); plus.isHidden = true; plus.allowsKeyEquivalentWhenHidden = true; reading.addItem(plus)
         reading.addItem(.separator())
@@ -151,7 +169,8 @@ import ReaderCore
         subtitleLabel.font = .systemFont(ofSize:11); subtitleLabel.textColor = .secondaryLabelColor
         chapterLabel.font = .systemFont(ofSize:12,weight:.medium); chapterLabel.textColor = .secondaryLabelColor; chapterLabel.lineBreakMode = .byTruncatingTail
         progressLabel.font = .monospacedDigitSystemFont(ofSize:11,weight:.regular); progressLabel.textColor = .secondaryLabelColor
-        let sidebarToggle = button("sidebar.left","书架与目录",#selector(toggleSidebar)), mode = button("rectangle.compress.vertical","摸鱼模式 ⇧⌘M",#selector(toggleStealth)), settings = button("textformat.size","阅读设置 ⌘,",#selector(showSettings)), prev = button("chevron.left","上一章 ⌘[",#selector(previousChapter)), next = button("chevron.right","下一章 ⌘]",#selector(nextChapter))
+        table.activateSelection = { [weak self] in self?.selectChapter() }
+        let sidebarToggle = button("sidebar.left","书架与目录",#selector(toggleSidebar)), mode = button("rectangle.compress.vertical","摸鱼模式 ⇧⌘M",#selector(toggleStealth)), settings = button("textformat.size","阅读设置 ⌘,",#selector(showSettings)), prev = button("chevron.left","上一页 ←",#selector(previousPage)), next = button("chevron.right","下一页 →",#selector(nextPage))
         let line = NSBox(); line.boxType = .separator
         for v in [titleLabel,subtitleLabel,chapterLabel,progressLabel,sidebarToggle,mode,settings,prev,next,line,normalSurface] { v.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(v) }
         NSLayoutConstraint.activate([sidebarToggle.leadingAnchor.constraint(equalTo:content.leadingAnchor,constant:20),sidebarToggle.centerYAnchor.constraint(equalTo:titleLabel.centerYAnchor),titleLabel.centerXAnchor.constraint(equalTo:content.centerXAnchor),titleLabel.topAnchor.constraint(equalTo:content.topAnchor,constant:28),titleLabel.trailingAnchor.constraint(lessThanOrEqualTo:settings.leadingAnchor,constant:-16),subtitleLabel.centerXAnchor.constraint(equalTo:titleLabel.centerXAnchor),subtitleLabel.topAnchor.constraint(equalTo:titleLabel.bottomAnchor,constant:7),mode.trailingAnchor.constraint(equalTo:content.trailingAnchor,constant:-32),mode.centerYAnchor.constraint(equalTo:titleLabel.centerYAnchor),settings.trailingAnchor.constraint(equalTo:mode.leadingAnchor,constant:-9),settings.centerYAnchor.constraint(equalTo:mode.centerYAnchor),line.leadingAnchor.constraint(equalTo:content.leadingAnchor,constant:52),line.trailingAnchor.constraint(equalTo:content.trailingAnchor,constant:-52),line.topAnchor.constraint(equalTo:subtitleLabel.bottomAnchor,constant:14),normalSurface.topAnchor.constraint(equalTo:line.bottomAnchor,constant:3),normalSurface.leadingAnchor.constraint(equalTo:content.leadingAnchor),normalSurface.trailingAnchor.constraint(equalTo:content.trailingAnchor),normalSurface.bottomAnchor.constraint(equalTo:chapterLabel.topAnchor,constant:-16),chapterLabel.leadingAnchor.constraint(equalTo:content.leadingAnchor,constant:52),chapterLabel.bottomAnchor.constraint(equalTo:content.bottomAnchor,constant:-23),chapterLabel.trailingAnchor.constraint(lessThanOrEqualTo:progressLabel.leadingAnchor,constant:-16),next.trailingAnchor.constraint(equalTo:content.trailingAnchor,constant:-27),next.centerYAnchor.constraint(equalTo:chapterLabel.centerYAnchor),prev.trailingAnchor.constraint(equalTo:next.leadingAnchor,constant:-2),prev.centerYAnchor.constraint(equalTo:next.centerYAnchor),progressLabel.trailingAnchor.constraint(equalTo:prev.leadingAnchor,constant:-16),progressLabel.centerYAnchor.constraint(equalTo:chapterLabel.centerYAnchor)])
@@ -209,27 +228,53 @@ import ReaderCore
         return cell
     }
     func controlTextDidChange(_ obj: Notification) { filterChapters() }
+    func control(_ control:NSControl,textView:NSTextView,doCommandBy commandSelector:Selector) -> Bool {
+        guard control === search else { return false }
+        if commandSelector == #selector(NSResponder.moveDown(_:)) {
+            if table.selectedRow < 0, !filtered.isEmpty { table.selectRowIndexes(IndexSet(integer:0),byExtendingSelection:false) }
+            window.makeFirstResponder(table); return true
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) { selectChapter(); return true }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) { window.makeFirstResponder(active.text); return true }
+        return false
+    }
     func filterChapters() {
         let query = search.stringValue.trimmingCharacters(in:.whitespacesAndNewlines)
         filtered = book?.chapters.indices.filter { query.isEmpty || book!.chapters[$0].title.localizedCaseInsensitiveContains(query) } ?? []
         table.reloadData(); selectCurrentRow()
     }
-    func selectCurrentRow() { if let row = filtered.firstIndex(of:currentChapter) { table.selectRowIndexes(IndexSet(integer:row),byExtendingSelection:false); table.scrollRowToVisible(row) } }
-    @objc func selectChapter() { guard filtered.indices.contains(table.selectedRow) else { return }; recordPosition(); openChapter(filtered[table.selectedRow]) }
+    func selectCurrentRow() {
+        guard !filtered.isEmpty else { table.deselectAll(nil); return }
+        let row = filtered.firstIndex(of:currentChapter) ?? 0
+        table.selectRowIndexes(IndexSet(integer:row),byExtendingSelection:false); table.scrollRowToVisible(row)
+    }
+    @objc func selectChapter() { guard filtered.indices.contains(table.selectedRow) else { return }; openChapter(filtered[table.selectedRow]) }
     @objc func selectBook() {
         guard state.books.indices.contains(bookPicker.indexOfSelectedItem) else { return }
-        recordPosition(); state.selectedBook = state.books[bookPicker.indexOfSelectedItem].id; refreshLibrary()
-        let pos = state.positions[state.selectedBook!] ?? ReadingPosition(); openChapter(pos.chapter,character:pos.character)
+        let target = state.books[bookPicker.indexOfSelectedItem]
+        let pos = state.positions[target.id] ?? ReadingPosition()
+        do { try openBook(target,chapter:pos.chapter,character:pos.character) }
+        catch { refreshLibrary(); showError(error) }
+    }
+    func openBook(_ target:Book,chapter:Int,character:Int = 0,end:Bool = false) throws {
+        let text = try target.text(at:chapter)
+        commitChapter(book:target,chapter:chapter,text:text,character:character,end:end)
+    }
+    func commitChapter(book target:Book,chapter:Int,text:String,character:Int = 0,end:Bool = false) {
+        recordPosition()
+        let changedBook = displayedBookID != target.id
+        rendering = true
+        state.selectedBook = target.id; displayedBookID = target.id
+        currentChapter = chapter; currentText = text.isEmpty ? "本节没有文字内容" : text
+        if changedBook { refreshLibrary() } else { selectCurrentRow() }
+        render(character:character); if end { active.goToEnd() }
+        rendering = false; recordPosition(); updateProgress(); persist()
+        (isStealth ? mini : window)?.makeFirstResponder(active.text)
     }
     func openChapter(_ chapter: Int, character: Int = 0, end: Bool = false) {
         guard let book, book.chapters.indices.contains(chapter) else { return }
-        do {
-            let text = try book.text(at:chapter)
-            rendering = true; currentChapter = chapter; currentText = text.isEmpty ? "本节没有文字内容" : text
-            render(character:character); if end { active.goToEnd() }
-            rendering = false; selectCurrentRow(); recordPosition(); updateProgress(); persist()
-            (isStealth ? mini : window)?.makeFirstResponder(active.text)
-        } catch { rendering = false; showError(error) }
+        do { try openBook(book,chapter:chapter,character:character,end:end) }
+        catch { showError(error) }
     }
     func render(character: Int) {
         let p = state.preferences
@@ -249,6 +294,7 @@ import ReaderCore
     }
     func syncHoverToolbar() {
         guard mini != nil else { return }
+        miniSurface.interaction.setHoverTracking(isStealth && mini.isVisible && !NSApp.isHidden)
         hoverToolbar?.update(enabled:isStealth && mini.isVisible && !miniSurface.visuallyHidden && !NSApp.isHidden,pinned:state.preferences.floating,tint:miniSurface.foregroundColor,fontSize:state.preferences.stealthFontSize)
     }
     @objc func showChapterPicker() {
@@ -256,7 +302,7 @@ import ReaderCore
         if chapterPicker == nil {
             chapterPicker = ChapterPicker()
             chapterPicker?.onSelect = { [weak self] index in
-                guard let self else { return }; self.recordPosition(); self.openChapter(index); self.mini.makeKeyAndOrderFront(nil)
+                guard let self else { return }; self.openChapter(index); self.mini.makeKeyAndOrderFront(nil)
             }
         }
         let anchor = hoverToolbar?.panel.isVisible == true ? hoverToolbar!.panel.frame : mini.frame
@@ -269,11 +315,7 @@ import ReaderCore
     func applyContrast() {
         let p = state.preferences
         guard p.adaptiveText, p.opacity < 1, let sample = lastBackgroundSample, contrast.status != .needsPermission else { miniSurface.applyBackgroundSample(nil); miniSurface.applyAdaptiveColor(nil); return }
-        let panel = ContrastMath.linear((dark ? 0.025 : 0.97)*ContrastMath.exposure(p.brightness))
-        guard sample.windowFrame == mini.frame else { return }
-        let background = sample.median*(1-p.opacity)+panel*p.opacity
-        lastAdaptiveWhite = ContrastMath.prefersWhite(backgroundLuminance:background,brightness:p.brightness,textOpacity:p.textOpacity,previous:lastAdaptiveWhite)
-        miniSurface.applyAdaptiveColor(lastAdaptiveWhite); miniSurface.applyBackgroundSample(sample); syncHoverToolbar(); refreshContrastStatus()
+        miniSurface.applyBackgroundSample(sample); syncHoverToolbar(); refreshContrastStatus()
     }
     func refreshContrastStatus() {
         statusItem?.button?.toolTip = contrast.status == .needsPermission ? "moread：自动文字需要屏幕读取权限" : "moread · 点击显示，右键打开菜单"
@@ -301,11 +343,11 @@ import ReaderCore
         if settings != nil { rebuildSettings() }; persist()
     }
     func recordPosition() {
-        guard !rendering, let book else { return }
+        guard !rendering, let book, displayedBookID == book.id else { return }
         state.positions[book.id] = ReadingPosition(chapter:currentChapter,character:active.visibleCharacter())
     }
     func updateProgress() {
-        guard let book else { return }
+        guard let book, displayedBookID == book.id else { return }
         chapterLabel.stringValue = book.chapters[currentChapter].title
         let fraction = Double(active.visibleCharacter()) / Double(max(1,(currentText as NSString).length))
         let percent = 100 * (Double(currentChapter)+fraction) / Double(book.chapters.count)
@@ -320,7 +362,9 @@ import ReaderCore
         recordPosition(); updateProgress(); if settings != nil { rebuildSettings() }; persist()
     }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if [#selector(previousPage),#selector(nextPage)].contains(menuItem.action), !menuItem.keyEquivalent.isEmpty { return readerHasKeyboardFocus }
         if [#selector(previousPage),#selector(nextPage),#selector(previousChapter),#selector(nextChapter)].contains(menuItem.action) { return canNavigateReader }
+        if [#selector(importBook),#selector(importFromBooks)].contains(menuItem.action) { return !importing }
         if [#selector(moreTransparent),#selector(lessTransparent)].contains(menuItem.action) { return isStealth }
         return true
     }
@@ -335,7 +379,7 @@ import ReaderCore
         render(character:character); if settings != nil { rebuildSettings() }; persist()
     }
     func scheduleSave() { saveWork?.cancel(); let work = DispatchWorkItem { [weak self] in self?.persist() }; saveWork = work; DispatchQueue.main.asyncAfter(deadline:.now()+0.35,execute:work) }
-    func persist() { saveWork?.cancel(); do { try state.save(to:stateURL) } catch { showError(error) } }
+    func persist() { saveWork?.cancel(); guard libraryLoaded else { return }; do { try state.save(to:stateURL) } catch { showError(error) } }
     func turnPage(_ direction: Int) {
         guard canNavigateReader, let book else { return }
         if active.page(direction) {
@@ -345,8 +389,8 @@ import ReaderCore
     }
     @objc func nextPage() { turnPage(1) }
     @objc func previousPage() { turnPage(-1) }
-    @objc func nextChapter() { guard canNavigateReader else { return }; recordPosition(); openChapter(currentChapter+1) }
-    @objc func previousChapter() { guard canNavigateReader else { return }; recordPosition(); openChapter(currentChapter-1) }
+    @objc func nextChapter() { guard canNavigateReader else { return }; openChapter(currentChapter+1) }
+    @objc func previousChapter() { guard canNavigateReader else { return }; openChapter(currentChapter-1) }
     @objc func focusSearch() { if isStealth { showChapterPicker(); return }; if sidebarWidth?.constant != 0 { toggleSidebar() }; window.makeFirstResponder(search) }
     @objc func toggleStealth() {
         guard book != nil else { importBook(); return }
@@ -356,8 +400,13 @@ import ReaderCore
         else { mini.orderOut(nil); window.makeKeyAndOrderFront(nil); window.makeFirstResponder(normalSurface.text) }
         updateProgress(); syncContrast(); syncHoverToolbar(); if settings != nil { rebuildSettings() }; persist(); NSApp.activate(ignoringOtherApps:true)
     }
-    @objc func hideReader() { visibilityShortcut.cancelPending(); active.locator.cancel(); hoverToolbar?.stop(); chapterPicker?.close(); contrast.stop(); recordPosition(); persist(); (isStealth ? mini : window)?.orderOut(nil); settings?.orderOut(nil) }
-    @objc func closeWindow() { hideReader() }
+    @objc func hideReader() { visibilityShortcut.cancelPending(); active.locator.cancel(); hoverToolbar?.stop(); miniSurface.interaction.setHoverTracking(false); chapterPicker?.close(); contrast.stop(); recordPosition(); persist(); (isStealth ? mini : window)?.orderOut(nil); settings?.orderOut(nil) }
+    @objc func closeWindow() { closeReaderWindow(NSApp.keyWindow) }
+    func closeReaderWindow(_ keyWindow:NSWindow?) {
+        if let settings, keyWindow === settings { settings.performClose(nil); return }
+        if let chapterPicker, keyWindow === chapterPicker.panel { chapterPicker.close(); return }
+        hideReader()
+    }
     @objc func showReader() { revealReader(highlight:true) }
     func revealReader(highlight:Bool) {
         guard let target = isStealth ? mini : window else { return }
@@ -383,11 +432,11 @@ import ReaderCore
         guard !importing else { return }; importing = true; subtitleLabel.stringValue = "正在导入…"
         let library = support.appendingPathComponent("Books")
         DispatchQueue.global(qos:.userInitiated).async { [weak self] in
-            let result = Result { try EPUB.importBook(from:url,library:library) }
+            let result = Result { try EPUB.importBookWithOpeningText(from:url,library:library) }
             DispatchQueue.main.async {
                 guard let self else { return }; self.importing = false
                 switch result {
-                case .success(let newBook): self.recordPosition(); self.state.books.append(newBook); self.state.selectedBook = newBook.id; self.currentChapter = 0; self.search.stringValue = ""; self.refreshLibrary(); self.openChapter(0); self.showReader()
+                case .success(let imported): self.state.books.append(imported.book); self.search.stringValue = ""; self.commitChapter(book:imported.book,chapter:0,text:imported.text); self.showReader()
                 case .failure(let error): self.refreshLibrary(); self.showError(error)
                 }
             }
@@ -419,7 +468,7 @@ import ReaderCore
         NSLayoutConstraint.activate([stack.topAnchor.constraint(equalTo:root.topAnchor,constant:14),stack.leadingAnchor.constraint(equalTo:root.leadingAnchor,constant:14),stack.trailingAnchor.constraint(equalTo:root.trailingAnchor,constant:-14)])
         func fullWidth(_ view:NSView) { view.widthAnchor.constraint(equalToConstant:308).isActive = true; stack.addArrangedSubview(view) }
         let header = NSStackView(); header.orientation = .horizontal; header.alignment = .centerY; header.spacing = 6; header.distribution = .fill
-        let title = NSTextField(labelWithString:isStealth ? "摸鱼阅读" : "专注阅读"); title.font = .systemFont(ofSize:14,weight:.semibold); title.setContentHuggingPriority(NSLayoutConstraint.Priority(1),for:.horizontal)
+        let title = NSTextField(labelWithString:settingsSection == 0 ? (settingsTab == 1 ? "摸鱼小窗排版" : "正常阅读排版") : "阅读设置"); title.font = .systemFont(ofSize:14,weight:.semibold); title.setContentHuggingPriority(NSLayoutConstraint.Priority(1),for:.horizontal)
         header.addArrangedSubview(title)
         let themeIcon = state.preferences.theme == "system" ? "circle.lefthalf.filled" : (state.preferences.theme == "dark" ? "moon.fill" : "sun.max.fill")
         for control in [button(themeIcon,"外观：跟随系统 / 亮色 / 暗色",#selector(showThemeMenu(_:))),button(state.preferences.readingMode == .paged ? "book.pages" : "scroll","切换翻页 / 滚动 ⇧⌘P",#selector(toggleReadingMode)),button(isStealth ? "rectangle.expand.vertical" : "rectangle.compress.vertical","切换正常 / 摸鱼 ⇧⌘M",#selector(toggleStealth))] { control.contentTintColor = ReaderPalette.accent; header.addArrangedSubview(control) }
@@ -439,7 +488,7 @@ import ReaderCore
             let text = NSTextView(); text.isEditable = false; text.isSelectable = true; text.drawsBackground = false
             text.textContainerInset = NSSize(width:8,height:6); text.isHorizontallyResizable = false; text.autoresizingMask = [.width]
             text.textContainer?.widthTracksTextView = true; text.font = .systemFont(ofSize:11); text.textColor = .labelColor
-            text.string = "快捷键与恢复方式\n\n← / ↑ / Page Up　上一页\n→ / ↓ / Page Down　下一页\n空格 / ⇧空格　下一页 / 上一页\n⌘[ / ⌘]　上一章 / 下一章\n⌘F　搜索目录\n⌘,　打开设置\n⌘+ / ⌘−　放大 / 缩小字号\n⌥⌘↑ / ↓　提高 / 降低亮度\n⌥⌘→ / ←　增加 / 减少背景透明\n⇧⌘P　翻页 / 滚动\n⇧⌘M　正常阅读 / 摸鱼小窗\nEsc / ⌘W　隐藏窗口\n\n点击 Dock 图标或左键菜单栏图标可唤起。\n右键菜单栏图标打开菜单。\n指针进入小窗显示目录、设置和置顶按钮。\n拖动正文移动窗口，拖动边缘调整大小。\n\n除左右键组合外，快捷键需 moread 获得焦点。"
+            text.string = "快捷键与恢复方式\n\n← / ↑ / Page Up　上一页\n→ / ↓ / Page Down　下一页\n空格 / ⇧空格　下一页 / 上一页\n⌘[ / ⌘]　上一章 / 下一章\n⌘F　搜索目录\n⌘,　打开设置\n⌘+ / ⌘−　放大 / 缩小字号\n⌥⌘↑ / ↓　提高 / 降低亮度\n⌥⌘→ / ←　增加 / 减少背景透明\n⇧⌘P　翻页 / 滚动\n⇧⌘M　正常阅读 / 摸鱼小窗\nEsc　隐藏阅读器\n⌘W　关闭当前窗口\n\n点击 Dock 图标或左键菜单栏图标可唤起。\n右键菜单栏图标打开菜单。\n指针进入小窗显示目录、设置和置顶按钮。\n拖动正文移动窗口，拖动边缘调整大小。\n\n除左右键组合外，快捷键需 moread 获得焦点。"
             text.setAccessibilityLabel("快捷键与恢复方式"); scroll.documentView = text
             text.frame = NSRect(x:0,y:0,width:308,height:560)
             return
@@ -492,6 +541,7 @@ import ReaderCore
     @objc func interactionOptionChanged(_ sender:NSButton) {
         guard let key = sender.identifier?.rawValue else { return }
         UserDefaults.standard.set(sender.state == .on,forKey:key)
+        if key == "ArrowVisibilityEnabled" { if sender.state == .on { visibilityShortcut.start() } else { visibilityShortcut.stop() } }
         if key == "RevealHighlightEnabled", sender.state == .off { active.locator.cancel() }
     }
     @objc func settingsSectionChanged(_ sender:NSSegmentedControl) { settingsSection = sender.selectedSegment; rebuildSettings() }
@@ -511,11 +561,8 @@ import ReaderCore
     @objc func selectTheme(_ sender:NSMenuItem) { setTheme(["system","light","dark"][sender.tag]) }
     func setTheme(_ theme:String) { state.preferences.theme = theme; let character = active.visibleCharacter(); applyAppearance(); render(character:character); rebuildSettings(); persist() }
     @objc func clearTextPreset() { let character = active.visibleCharacter(); state.preferences.opacity = 0; state.preferences.textOpacity = 1; state.preferences.adaptiveText = true; render(character:character); rebuildSettings(); persist() }
-    @objc func readingModeChanged(_ sender:NSSegmentedControl) { setReadingMode(sender.selectedSegment == 0 ? .paged : .scrolling) }
     @objc func themeChanged(_ sender: NSSegmentedControl) { setTheme(["system","light","dark"][sender.selectedSegment]) }
     @objc func settingsTabChanged(_ sender: NSSegmentedControl) { settingsTab = sender.selectedSegment; rebuildSettings() }
-    @objc func fontChanged(_ sender: NSPopUpButton) { let name = ["serif","system","kai","mono"][sender.indexOfSelectedItem]; let anchor = active.visibleCharacter(); if settingsTab == 1 { state.preferences.stealthFontName = name } else { state.preferences.fontName = name }; render(character:anchor); persist() }
-    @objc func blackStealth() { let anchor = active.visibleCharacter(); state.preferences.theme = "dark"; state.preferences.brightness = 1; state.preferences.opacity = 1; state.preferences.textOpacity = 1; applyAppearance(); render(character:anchor); rebuildSettings(); persist() }
     func settingValue(_ tag:Int,_ value:Double) -> String {
         if tag == 4 || tag == 5 { return String(format:"%.2f×",value) }
         if tag == 2 || tag == 3 || tag == 9 { return "\(Int((value*100).rounded()))%" }
@@ -536,7 +583,7 @@ import ReaderCore
         default: state.preferences.margin = value
         }
         settingsValues[sender.tag]?.stringValue = settingValue(sender.tag,value)
-        render(character:anchor); if let dim = settings?.contentView?.subviews.last as? DimmingOverlay { dim.brightness = state.preferences.brightness }; recordPosition(); scheduleSave()
+        render(character:anchor); recordPosition(); scheduleSave()
     }
     @objc func toggleFloating(_ sender: NSButton) { state.preferences.floating = sender.state == .on; mini.level = state.preferences.floating ? .floating : .normal; syncHoverToolbar(); persist() }
     @objc func about() { NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"moread",.applicationVersion:"1.3",.credits:NSAttributedString(string:"原生本地阅读器\nEPUB · 无框小窗 · 离线阅读")]) }

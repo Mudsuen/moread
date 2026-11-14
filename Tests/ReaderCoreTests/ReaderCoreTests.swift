@@ -40,13 +40,26 @@ final class ReaderCoreTests: XCTestCase {
         let p = try JSONDecoder().decode(ReaderPreferences.self,from:data)
         XCTAssertEqual(p.brightness,1); XCTAssertEqual(p.textOpacity,1); XCTAssertEqual(p.readingMode,.paged); XCTAssertEqual(p.fontSize,22); XCTAssertEqual(p.stealthFontSize,9); XCTAssertEqual(p.theme,"system"); XCTAssertEqual(p.lineHeight,1.35)
     }
-    func testMalformedHTMLRecovery() throws {
-        let text = try EPUB.plainText(Data("<html><body><ol><li>正文未闭合</ol><p>后续正文</p></body></html>".utf8))
-        XCTAssertTrue(text.contains("正文未闭合")); XCTAssertTrue(text.contains("后续正文"))
+    func testMalformedHTMLIsRejectedWithoutRepair() throws {
+        XCTAssertThrowsError(try EPUB.plainText(Data("<html><body><ol><li>正文未闭合</ol><p>后续正文</p></body></html>".utf8)))
     }
     func testMalformedImportCleansUp() throws {
         let source = root.appendingPathComponent("bad.epub"); try Data("invalid".utf8).write(to:source)
         let library = root.appendingPathComponent("library"); XCTAssertThrowsError(try EPUB.importBook(from:source,library:library)); XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath:library.path),[])
+    }
+    func testImportRejectsMissingOrMalformedOpeningChapterAndCleansUp() throws {
+        try fixture()
+        let source = root.appendingPathComponent("source")
+        try FileManager.default.createDirectory(at:source,withIntermediateDirectories:true)
+        for name in ["META-INF","OEBPS"] { try FileManager.default.moveItem(at:root.appendingPathComponent(name),to:source.appendingPathComponent(name)) }
+        let library = root.appendingPathComponent("library")
+        let chapter = source.appendingPathComponent("OEBPS/one.xhtml")
+        for body in ["<html><body><p>Unclosed</body></html>", ""] {
+            if body.isEmpty { try FileManager.default.removeItem(at:chapter) }
+            else { try body.write(to:chapter,atomically:true,encoding:.utf8) }
+            XCTAssertThrowsError(try EPUB.importBook(from:source,library:library))
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath:library.path),[])
+        }
     }
     func testZippedImport() throws {
         try fixture(); let archive = root.appendingPathComponent("sample.epub")

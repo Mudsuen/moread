@@ -18,7 +18,6 @@ final class StealthInteraction: NSView {
     var clearBackground = false
     private var poll: Timer?
     private var tracking: NSTrackingArea?
-    private var mouseMonitor: Any?
     private var pressed: NSEvent?
     private var pressPoint = NSPoint.zero
     private var dragged = false
@@ -30,11 +29,22 @@ final class StealthInteraction: NSView {
     override init(frame:NSRect) {
         super.init(frame:frame)
         setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityLabel("阅读窗口，可拖动或双击隐藏")
-        poll = Timer.scheduledTimer(withTimeInterval:0.1,repeats:true) { [weak self] _ in self?.updateHover() }
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching:.mouseMoved) { [weak self] _ in self?.updateHover() }
     }
     required init?(coder:NSCoder) { fatalError() }
-    deinit { poll?.invalidate(); if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) } }
+    deinit { poll?.invalidate() }
+    var isHoverTracking: Bool { poll != nil }
+    func setHoverTracking(_ enabled:Bool) {
+        if enabled {
+            if poll == nil {
+                let timer = Timer(timeInterval:0.1,repeats:true) { [weak self] _ in self?.updateHover() }
+                poll = timer; RunLoop.main.add(timer,forMode:.common)
+            }
+            updateHover()
+        } else {
+            poll?.invalidate(); poll = nil
+            if hovering { hovering = false; needsDisplay = true }
+        }
+    }
     override func acceptsFirstMouse(for event:NSEvent?) -> Bool { true }
     override func accessibilityPerformPress() -> Bool { guard visuallyHidden else { return false }; toggleVisualVisibility?(); return true }
     override func hitTest(_ point:NSPoint) -> NSView? { !isHidden && bounds.contains(point) ? self : nil }

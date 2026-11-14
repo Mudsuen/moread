@@ -4,25 +4,7 @@ import ReaderCore
 
 struct BackgroundSample {
     let windowFrame: NSRect
-    let captureFrame: NSRect
-    let width: Int
-    let height: Int
-    let luminance: [Double]
-    var median: Double { let sorted = luminance.sorted(); return sorted[sorted.count/2] }
-    // Screen coordinates are bottom-up; captured pixel rows are top-down.
-    func background(under rect:NSRect) -> Double? {
-        let region = rect.intersection(captureFrame)
-        guard !region.isEmpty else { return nil }
-        let x0 = max(0,Int((region.minX-captureFrame.minX)/captureFrame.width*Double(width)))
-        let x1 = min(width,Int(ceil((region.maxX-captureFrame.minX)/captureFrame.width*Double(width))))
-        let y0 = max(0,Int((captureFrame.maxY-region.maxY)/captureFrame.height*Double(height)))
-        let y1 = min(height,Int(ceil((captureFrame.maxY-region.minY)/captureFrame.height*Double(height))))
-        guard x0 < x1, y0 < y1 else { return nil }
-        var local: [Double] = []
-        for y in y0..<y1 { local.append(contentsOf:luminance[(y*width+x0)..<(y*width+x1)]) }
-        local.sort()
-        return local[local.count/2]
-    }
+    let median: Double
 }
 
 // Screen pixels remain in memory only. Capture excludes this process and is cropped to the reader.
@@ -90,12 +72,13 @@ struct BackgroundSample {
             config.showsCursor = false; config.capturesAudio = false
             let image = try await SCScreenshotManager.captureImage(contentFilter:filter,configuration:config)
             guard token == generation, enabled, window.isVisible, window.frame == frame else { return }
-            let captureFrame = NSRect(x:screen.frame.minX+rect.minX,y:screen.frame.maxY-rect.maxY,width:rect.width,height:rect.height)
-            guard let sample = Self.sample(of:image,windowFrame:frame,captureFrame:captureFrame) else { status = .unavailable; return }
+            let sample = await Task.detached(priority:.utility) { Self.sample(of:image,windowFrame:frame) }.value
+            guard token == generation, enabled, window.isVisible, window.frame == frame else { return }
+            guard let sample else { status = .unavailable; return }
             status = .active; onSample?(sample)
         } catch { if token == generation { content = nil; status = .unavailable } }
     }
-    nonisolated static func sample(of image:CGImage,windowFrame:NSRect,captureFrame:NSRect) -> BackgroundSample? {
+    nonisolated static func sample(of image:CGImage,windowFrame:NSRect) -> BackgroundSample? {
         let width = image.width, height = image.height
         var pixels = [UInt8](repeating:0,count:width*height*4)
         return pixels.withUnsafeMutableBytes { buffer in
@@ -108,11 +91,12 @@ struct BackgroundSample {
                 guard data[i+3] >= 250 else { return nil }
                 values.append(0.2126*ContrastMath.linear(Double(data[i])/255)+0.7152*ContrastMath.linear(Double(data[i+1])/255)+0.0722*ContrastMath.linear(Double(data[i+2])/255))
             }
-            return BackgroundSample(windowFrame:windowFrame,captureFrame:captureFrame,width:width,height:height,luminance:values)
+            values.sort()
+            return BackgroundSample(windowFrame:windowFrame,median:values[values.count/2])
         }
     }
     nonisolated static func luminance(of image:CGImage) -> Double? {
         let frame = NSRect(x:0,y:0,width:image.width,height:image.height)
-        return sample(of:image,windowFrame:frame,captureFrame:frame)?.median
+        return sample(of:image,windowFrame:frame)?.median
     }
 }

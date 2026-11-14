@@ -24,6 +24,7 @@ struct ArrowChord {
     private var localRight = false
     func start() {
         stop()
+        guard isEnabled() else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching:[.keyDown,.keyUp]) { [weak self] event in
             guard let self, self.isEnabled(), !self.forwarding, event.keyCode == 123 || event.keyCode == 124 else { return event }
             if event.keyCode == 123 { self.localLeft = event.type == .keyDown }

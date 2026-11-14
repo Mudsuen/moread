@@ -250,7 +250,8 @@ final class ReaderUITests: XCTestCase {
         _ = NSApplication.shared
         let name = "moread-window-test-\(UUID().uuidString)"
         defer { UserDefaults.standard.removeObject(forKey:"NSWindow Frame \(name)") }
-        let original = StealthWindow(contentRect:NSRect(x:400,y:400,width:222,height:89),styleMask:[.borderless],backing:.buffered,defer:false)
+        let screen = NSScreen.main!.visibleFrame
+        let original = StealthWindow(contentRect:NSRect(x:screen.minX+40,y:screen.maxY-140,width:222,height:89),styleMask:[.borderless],backing:.buffered,defer:false)
         original.isReleasedWhenClosed = false; original.saveFrame(usingName:name)
         let reopened = StealthWindow(contentRect:NSRect(x:0,y:0,width:360,height:150),styleMask:[.borderless],backing:.buffered,defer:false)
         reopened.isReleasedWhenClosed = false
@@ -305,21 +306,17 @@ final class ReaderUITests: XCTestCase {
         }
     }
 
-    func testCaptureMapOrientationMedianAndTransparency() {
+    func testCaptureSummaryMedianAndTransparency() {
         let width = 20, height = 20, frame = NSRect(x:150,y:-200,width:200,height:100)
         var pixels = [UInt8](repeating:255,count:width*height*4)
-        // Top half white, bottom half black, using explicit top-to-bottom CGImage rows.
-        for y in 10..<20 { for x in 0..<20 { for c in 0..<3 { pixels[(y*width+x)*4+c] = 0 } } }
+        for y in 4..<20 { for x in 0..<20 { for c in 0..<3 { pixels[(y*width+x)*4+c] = 0 } } }
         let provider = CGDataProvider(data:Data(pixels) as CFData)!
         let image = CGImage(width:width,height:height,bitsPerComponent:8,bitsPerPixel:32,bytesPerRow:width*4,space:CGColorSpace(name:CGColorSpace.sRGB)!,bitmapInfo:CGBitmapInfo(rawValue:CGImageAlphaInfo.premultipliedLast.rawValue),provider:provider,decode:nil,shouldInterpolate:false,intent:.defaultIntent)!
-        let sample = BackgroundContrast.sample(of:image,windowFrame:frame,captureFrame:frame)!
-        XCTAssertEqual(sample.background(under:NSRect(x:170,y:-130,width:30,height:20)),1)
-        XCTAssertEqual(sample.background(under:NSRect(x:170,y:-190,width:30,height:20)),0)
-        XCTAssertNil(sample.background(under:NSRect(x:0,y:0,width:20,height:20)))
-        let mostlyDark = BackgroundSample(windowFrame:frame,captureFrame:frame,width:10,height:10,luminance:Array(repeating:0,count:80)+Array(repeating:1,count:20))
-        XCTAssertEqual(mostlyDark.background(under:frame),0,"A small white patch must not invert the surrounding dark region")
+        let sample = BackgroundContrast.sample(of:image,windowFrame:frame)!
+        XCTAssertEqual(sample.windowFrame,frame)
+        XCTAssertEqual(sample.median,0,"A small white patch must not invert the surrounding dark region")
         let transparent = CGContext(data:nil,width:10,height:10,bitsPerComponent:8,bytesPerRow:40,space:CGColorSpace(name:CGColorSpace.sRGB)!,bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!.makeImage()!
-        XCTAssertNil(BackgroundContrast.sample(of:transparent,windowFrame:frame,captureFrame:frame),"Missing pixels must not be treated as a black background")
+        XCTAssertNil(BackgroundContrast.sample(of:transparent,windowFrame:frame),"Missing pixels must not be treated as a black background")
     }
     func testUniformContrastAcrossMixedBackgroundPreservesReadingAnchor() {
         _ = NSApplication.shared
@@ -328,8 +325,7 @@ final class ReaderUITests: XCTestCase {
         let content = String(repeating:"中文测试文字颜色应该按照实际背景变化。",count:50)
         view.display(content,fontSize:12,brightness:1,stealth:true,character:0,dark:true,fontName:"system",lineHeight:1.15,paragraphSpacing:0,margin:48,backgroundOpacity:0,textOpacity:0.7,adaptiveText:true)
         let anchor = view.visibleCharacter()
-        let values = (0..<130).flatMap { _ in (0..<240).map { $0 < 120 ? 1.0 : 0.0 } }
-        let sample = BackgroundSample(windowFrame:window.frame,captureFrame:window.frame,width:240,height:130,luminance:values)
+        let sample = BackgroundSample(windowFrame:window.frame,median:1)
         view.applyAdaptiveColor(true); view.applyBackgroundSample(sample)
         func white(at index:Int) -> Double { (view.text.textStorage!.attribute(.foregroundColor,at:index,effectiveRange:nil) as! NSColor).usingColorSpace(.genericGray)!.whiteComponent }
         XCTAssertLessThan(white(at:0),0.1); XCTAssertLessThan(white(at:14),0.1)
@@ -337,9 +333,9 @@ final class ReaderUITests: XCTestCase {
         _ = view.page(1)
         XCTAssertLessThan(white(at:0),0.1); XCTAssertLessThan(white(at:14),0.1)
         let nextAnchor = view.visibleCharacter()
-        let dark = BackgroundSample(windowFrame:window.frame,captureFrame:window.frame,width:1,height:1,luminance:[0])
+        let dark = BackgroundSample(windowFrame:window.frame,median:0)
         view.applyBackgroundSample(dark); XCTAssertGreaterThan(white(at:0),0.9)
-        let light = BackgroundSample(windowFrame:window.frame,captureFrame:window.frame,width:1,height:1,luminance:[1])
+        let light = BackgroundSample(windowFrame:window.frame,median:1)
         view.applyBackgroundSample(light); XCTAssertLessThan(white(at:14),0.1)
         XCTAssertEqual(view.visibleCharacter(),nextAnchor)
         let color = view.text.textStorage!.attribute(.foregroundColor,at:0,effectiveRange:nil) as! NSColor
@@ -354,7 +350,7 @@ final class ReaderUITests: XCTestCase {
             app.mini.isReleasedWhenClosed = false; app.mini.contentView = app.miniSurface
             app.state.preferences.theme = "dark"; app.state.preferences.opacity = 0; app.state.preferences.adaptiveText = true
             app.miniSurface.display("白色背景下不能因短暂采样失败而变成白字",fontSize:12,brightness:1,stealth:true,character:0,dark:true,fontName:"system",lineHeight:1.15,paragraphSpacing:0,margin:48,backgroundOpacity:0,adaptiveText:true)
-            let sample = BackgroundSample(windowFrame:app.mini.frame,captureFrame:app.mini.frame,width:1,height:1,luminance:[1])
+            let sample = BackgroundSample(windowFrame:app.mini.frame,median:1)
             app.contrast.onSample?(sample)
             XCTAssertLessThan(app.miniSurface.foregroundColor.usingColorSpace(.genericGray)!.whiteComponent,0.1)
             app.contrast.onStatus?(.unavailable)

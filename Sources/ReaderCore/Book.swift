@@ -136,16 +136,13 @@ public enum EPUB {
         // Common XHTML named entities are normalized without resolving remote DTDs.
         var normalized = String(decoding: data, as: UTF8.self)
         for (key,value) in ["&nbsp;":"&#160;", "&mdash;":"&#8212;", "&ndash;":"&#8211;", "&hellip;":"&#8230;", "&ldquo;":"&#8220;", "&rdquo;":"&#8221;", "&lsquo;":"&#8216;", "&rsquo;":"&#8217;"] { normalized = normalized.replacingOccurrences(of: key, with: value) }
-        do { try x.parse(Data(normalized.utf8)) }
-        catch {
-            // Some EPUBs contain HTML with omitted closing tags. Repair structure locally.
-            let repaired = try XMLDocument(data: Data(normalized.utf8), options: [.documentTidyXML, .nodeLoadExternalEntitiesNever])
-            result = ""; depth = 0; bodyDepth = 0; ignoredDepth = 0
-            try x.parse(repaired.xmlData)
-        }
+        try x.parse(Data(normalized.utf8))
         return result.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
     public static func importBook(from source: URL, library: URL) throws -> Book {
+        try importBookWithOpeningText(from:source,library:library).book
+    }
+    public static func importBookWithOpeningText(from source: URL, library: URL) throws -> (book:Book,text:String) {
         let fm = FileManager.default, destination = library.appendingPathComponent(UUID().uuidString)
         try fm.createDirectory(at: library, withIntermediateDirectories: true)
         do {
@@ -168,7 +165,7 @@ public enum EPUB {
                 if xml.contains("EncryptedData"), !xml.contains("http://www.idpf.org/2008/embedding"), !xml.contains("http://ns.adobe.com/pdf/enc#RC") { throw ReaderError.invalid("此 EPUB 受加密保护，无法导入") }
             }
             var book = try load(directory: destination); book.id = destination.lastPathComponent
-            return book
+            return (book,try book.text(at:0))
         } catch { try? fm.removeItem(at: destination); throw error }
     }
     private static func process(_ executable: String, _ arguments: [String]) throws -> String {

@@ -103,7 +103,7 @@ Use the same identity for subsequent builds if you enable screen capture. Ad-hoc
 4. Open **⌘,** to customize typography, theme, brightness, and transparency.
 5. Enable automatic text color only if you want the reader to adapt to the windows or desktop underneath it. macOS will require screen-recording access.
 
-Apple Books import is a local file import, not a connection to your Apple account or its reading-history service. Protected or unavailable cloud-only books cannot be imported as readable EPUBs.
+Apple Books import is a local file import, not a connection to your Apple account or its reading-history service. Protected or unavailable cloud-only books cannot be imported as readable EPUBs. The opening chapter must parse successfully before an import is committed. Malformed XHTML is reported as an error; it is not automatically repaired.
 
 ## Keyboard and mouse
 
@@ -128,7 +128,7 @@ Open Settings → **操作** (Controls) for the built-in shortcut reference and 
 | Show the reader | Click its Dock icon or left-click the menu bar book icon |
 | Menu bar actions | Right-click the menu bar book icon |
 
-Most shortcuts apply while moread has focus. The two-arrow visibility chord checks current key state while the app is running; its state machine is tested, but physical-keyboard behavior across other apps still needs broader validation. Within moread, a single horizontal arrow is briefly deferred to distinguish it from the chord.
+Page keys apply while the reading text has focus; modified arrow keys retain native text-selection behavior. Closing Settings or Contents with ⌘W closes that panel while leaving the reader visible. Most other shortcuts apply while moread has focus. The two-arrow visibility chord checks current key state while the app is running; its state machine is tested, but physical-keyboard behavior across other apps still needs broader validation. Within moread, a single horizontal arrow is briefly deferred to distinguish it from the chord.
 
 ## Privacy and local data
 
@@ -138,7 +138,7 @@ Imported books are copied into:
 ~/Library/Application Support/MudsReader/Books/
 ```
 
-The sibling `library.json` stores the library, per-book chapter and UTF-16 text offset, and reading preferences. Saves are atomic. Window geometry is stored in macOS application preferences. The legacy directory and bundle identifier (`com.muds.reader`) are preserved for upgrade compatibility.
+The sibling `library.json` stores the library, per-book chapter and UTF-16 text offset, and reading preferences. Saves are atomic. A failed library load stops startup without overwriting the existing state file. A failed book switch preserves the current book and reading position. Window geometry is stored in macOS application preferences. The legacy directory and bundle identifier (`com.muds.reader`) are preserved for upgrade compatibility.
 
 Original EPUBs and the Apple Books database are never edited. There is no cloud sync or content upload.
 

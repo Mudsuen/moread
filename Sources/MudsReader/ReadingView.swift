@@ -4,8 +4,9 @@ import ReaderCore
 final class ReadingTextView: NSTextView {
     var turnPage: ((Int) -> Void)?
     var hideReader: (() -> Void)?
-    var stealth = false
     override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection([.command,.control,.option,.shift])
+        guard modifiers.isEmpty || (event.keyCode == 49 && modifiers == .shift) else { super.keyDown(with:event); return }
         switch event.keyCode {
         case 123,126,116: turnPage?(-1)
         case 124,125,121: turnPage?(1)
@@ -17,9 +18,6 @@ final class ReadingTextView: NSTextView {
     override func rightMouseDown(with event: NSEvent) {
         if let menu { NSMenu.popUpContextMenu(menu,with:event,for:self) }
         else { super.rightMouseDown(with:event) }
-    }
-    override func mouseDown(with event: NSEvent) {
-        if stealth { window?.performDrag(with:event) } else { super.mouseDown(with:event) }
     }
 }
 final class StealthWindow: NSWindow {
@@ -152,7 +150,7 @@ final class ReaderSurface: NSView {
             return
         }
         layoutInputs = inputs
-        self.mode = mode; self.stealth = stealth; text.stealth = stealth; readingMargin = margin
+        self.mode = mode; self.stealth = stealth; readingMargin = margin
         interaction.isHidden = !stealth
         scroll.paged = mode == .paged; scroll.hasVerticalScroller = !stealth && mode == .scrolling
         text.isSelectable = !stealth; text.isVerticallyResizable = mode == .scrolling
@@ -173,7 +171,7 @@ final class ReaderSurface: NSView {
         source = attributed
         if mode == .scrolling { text.textStorage?.setAttributedString(source) }
         anchor = character; lastSize = .zero
-        changing = false; needsLayout = true; layoutSubtreeIfNeeded(); restore(character)
+        changing = false; needsLayout = true; layoutSubtreeIfNeeded()
     }
     private func paginate(anchoredAt character:Int) {
         pageRanges = []
@@ -208,6 +206,7 @@ final class ReaderSurface: NSView {
         let wasChanging = changing; changing = true
         let range = displayedRange
         text.textStorage?.setAttributedString(source.attributedSubstring(from:range))
+        text.textStorage?.addAttribute(.foregroundColor,value:foregroundColor,range:NSRange(location:0,length:range.length))
         text.frame.size.height = scroll.contentSize.height
         text.layoutManager?.ensureLayout(for:text.textContainer!)
         scroll.contentView.scroll(to:.zero); scroll.reflectScrolledClipView(scroll.contentView)
@@ -245,8 +244,6 @@ final class ReaderSurface: NSView {
     private func updateForegroundColor(_ color: NSColor) {
         guard foregroundColor != color else { return }
         foregroundColor = color
-        let updated = NSMutableAttributedString(attributedString:source)
-        updated.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:updated.length)); source = updated
         text.textStorage?.addAttribute(.foregroundColor,value:color,range:NSRange(location:0,length:(text.string as NSString).length))
     }
     func applyBackgroundSample(_ sample:BackgroundSample?) {
@@ -314,6 +311,15 @@ private struct ReaderLayoutInputs: Equatable {
             && lhs.margin == rhs.margin && lhs.mode == rhs.mode
             // Swift String equality folds canonically equivalent spellings; the reader
             // must preserve the exact source sequence and its UTF-16 reading offsets.
-            && lhs.text.utf8.elementsEqual(rhs.text.utf8)
+            && sameSource(lhs.text,rhs.text)
+    }
+    private static func sameSource(_ lhs:String,_ rhs:String) -> Bool {
+        var left = lhs, right = rhs
+        return left.withUTF8 { a in
+            right.withUTF8 { b in
+                guard a.count == b.count else { return false }
+                return a.isEmpty || memcmp(a.baseAddress!,b.baseAddress!,a.count) == 0
+            }
+        }
     }
 }
