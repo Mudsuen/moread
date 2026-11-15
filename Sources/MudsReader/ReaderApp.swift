@@ -16,6 +16,19 @@ import ReaderCore
     let support: URL
     private(set) var libraryLoaded = false
     private(set) var displayedBookID: String?
+    let persistence: LibraryPersistence
+    let chapterLoader: @Sendable (Book, Int) throws -> String
+    let bookImporter: @Sendable (URL, URL) throws -> (book: Book, text: String)
+    var errorHandler: ((Error) -> Void)?
+    var terminationReply: ((Bool) -> Void)?
+    var terminating = false
+    var chapterGeneration: UInt64 = 0, readingIntentGeneration: UInt64 = 0
+    var requestedChapter: ChapterLoadRequest?, pendingChapter: ChapterLoadRequest?
+    var chapterTask: Task<Void, Never>?, chapterReadTask: Task<Result<String, Error>, Never>?
+    var importBatches: [ImportBatch] = []
+    var importTask: Task<Void, Never>?
+    var importsReady = false
+
     var stateURL: URL { support.appendingPathComponent("library.json") }
     var book: Book? { state.books.first { $0.id == state.selectedBook } }
     var active: ReaderSurface { isStealth ? miniSurface : normalSurface }
@@ -25,6 +38,7 @@ import ReaderCore
         canNavigateReader && keyWindow === (isStealth ? mini : window) && keyWindow?.firstResponder === active.text
     }
     var settingsValues: [Int:NSTextField] = [:]
+    var settingsSliders: [Int:NSSlider] = [:]
     var contentPanel: NSView!
     var settingsTab = 0
     var settingsSection = 0
@@ -42,9 +56,15 @@ import ReaderCore
     override convenience init() {
         self.init(support: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("MudsReader"))
     }
-    init(support: URL) {
+    init(support: URL,
+         chapterLoader: @escaping @Sendable (Book, Int) throws -> String = { try $0.text(at: $1) },
+         bookImporter: @escaping @Sendable (URL, URL) throws -> (book: Book, text: String) = { try EPUB.importBookWithOpeningText(from: $0, library: $1) },
+         libraryWriter: @escaping LibraryPersistence.Writer = { try $0.save(to: $1) }) {
         self.support = support
+        self.chapterLoader = chapterLoader; self.bookImporter = bookImporter
+        self.persistence = LibraryPersistence(url: support.appendingPathComponent("library.json"), writer: libraryWriter)
         super.init()
+        persistence.onError = { [weak self] in self?.showError($0) }
         contrast.onSample = { [weak self] sample in self?.lastBackgroundSample = sample; self?.applyContrast() }
         contrast.onStatus = { [weak self] status in
             // A transient screenshot failure must not replace a correct color with the
@@ -60,24 +80,26 @@ import ReaderCore
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         let loaded = FileManager.default.fileExists(atPath: stateURL.path) ? try LibraryState.load(from: stateURL) : LibraryState()
         state = loaded
+        if FileManager.default.fileExists(atPath: stateURL.path) { persistence.setBaseline(loaded) }
         libraryLoaded = true
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         do { try loadLibrary() }
-        catch { showError(error); NSApp.terminate(nil); return }
+        catch { rejectPendingImports(); showError(error); NSApp.terminate(nil); return }
         applyAppearance(); buildMenus(); buildWindow(); buildMini(); applyAppearance(); restoringWindows = false; refreshLibrary()
         isStealth = UserDefaults.standard.bool(forKey:"StealthMode")
         appearanceObserver = DistributedNotificationCenter.default().addObserver(forName:NSNotification.Name("AppleInterfaceThemeChangedNotification"),object:nil,queue:.main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.applyAppearance(); self.render(character:self.active.visibleCharacter()); self.rebuildSettings()
+                self.applyAppearance(); self.render(character:self.active.visibleCharacter()); self.refreshVisibleSettings(structureChanged: true)
             }
         }
         if let book {
             let position = state.positions[book.id] ?? ReadingPosition()
-            openChapter(min(position.chapter,book.chapters.count-1), character: position.character)
+            openBook(book, chapter: min(position.chapter,book.chapters.count-1), position: position, userInitiated: false)
         }
-        showReader()
+        revealReader(highlight: true, userInitiated: false)
+        importsReady = true; startPendingImports()
         visibilityShortcut.toggle = { [weak self] in
             guard let self else { return }
             let target = self.isStealth ? self.mini : self.window
@@ -91,14 +113,37 @@ import ReaderCore
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showReader(); return true }
-    func applicationWillTerminate(_ notification: Notification) { visibilityShortcut.stop(); hoverToolbar?.stop(); chapterPicker?.close(); contrast.stop(); recordPosition(); persist() }
-    func windowWillClose(_ notification: Notification) { recordPosition(); persist() }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard libraryLoaded else { return .terminateNow }
+        guard !terminating else { return .terminateLater }
+        terminating = true; invalidateReadingIntent(); recordPosition(); saveWork?.cancel()
+        Task { [self] in
+            await importTask?.value
+            while true {
+                recordPosition()
+                let snapshot = state
+                if case .failure(let error) = await persistence.flush(snapshot, retryFailed: true) {
+                    terminating = false; showError(error); replyToTermination(false); return
+                }
+                if snapshot == state { replyToTermination(true); return }
+            }
+        }
+        return .terminateLater
+    }
+    func replyToTermination(_ accepted: Bool) { if let terminationReply { terminationReply(accepted) } else { NSApp.reply(toApplicationShouldTerminate: accepted) } }
+    func applicationWillTerminate(_ notification: Notification) { visibilityShortcut.stop(); hoverToolbar?.stop(); chapterPicker?.close(); contrast.stop(); invalidateReadingIntent() }
+    func windowWillClose(_ notification: Notification) {
+        if let closed = notification.object as? NSWindow, closed === window || closed === mini { invalidateReadingIntent() }
+        recordPosition(); persist()
+    }
     func windowDidMove(_ notification:Notification) { if !restoringWindows, (notification.object as? NSWindow) === mini { mini.saveFrame(usingName:"StealthReaderWindow"); syncContrast(); syncHoverToolbar() } }
     func windowDidResize(_ notification:Notification) { if !restoringWindows, (notification.object as? NSWindow) === mini { mini.saveFrame(usingName:"StealthReaderWindow"); syncContrast(); syncHoverToolbar() }; updateProgress() }
-    func applicationDidHide(_ notification:Notification) { contrast.stop(); hoverToolbar?.stop(); miniSurface.interaction.setHoverTracking(false); chapterPicker?.close() }
+    func applicationDidHide(_ notification:Notification) { invalidateReadingIntent(); contrast.stop(); hoverToolbar?.stop(); miniSurface.interaction.setHoverTracking(false); chapterPicker?.close() }
     func applicationDidUnhide(_ notification:Notification) { syncContrast(); syncHoverToolbar() }
     func windowDidResignKey(_ notification: Notification) { recordPosition(); persist() }
-    func application(_ sender: NSApplication, openFiles filenames: [String]) { if let file = filenames.first { importURL(URL(fileURLWithPath:file)) }; sender.reply(toOpenOrPrint: .success) }
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        importURLs(filenames.map { URL(fileURLWithPath: $0) }) { succeeded in sender.reply(toOpenOrPrint: succeeded ? .success : .failure) }
+    }
     func makeItem(_ title: String, _ action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = [.command]) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key); item.target = self; item.keyEquivalentModifierMask = modifiers; return item
     }
@@ -209,7 +254,13 @@ import ReaderCore
     func refreshLibrary() {
         bookPicker.removeAllItems()
         if state.books.isEmpty { bookPicker.addItem(withTitle:"尚未导入书籍"); bookPicker.isEnabled = false }
-        else { bookPicker.isEnabled = true; bookPicker.addItems(withTitles:state.books.map(\.title)); if let index = state.books.firstIndex(where:{$0.id == state.selectedBook}) { bookPicker.selectItem(at:index) } }
+        else {
+            bookPicker.isEnabled = true
+            let menu = NSMenu(); menu.autoenablesItems = false
+            for book in state.books { let item = NSMenuItem(title: book.title, action: nil, keyEquivalent: ""); item.representedObject = book.id; menu.addItem(item) }
+            bookPicker.menu = menu
+            if let item = menu.items.first(where: { ($0.representedObject as? String) == state.selectedBook }) { bookPicker.select(item) }
+        }
         titleLabel.stringValue = book?.title ?? "留一点时间，给阅读"
         subtitleLabel.stringValue = book.map { "\($0.author)  ·  \($0.chapters.count) 节" } ?? "导入一本 EPUB，开始阅读"
         filterChapters()
@@ -240,7 +291,8 @@ import ReaderCore
     }
     func filterChapters() {
         let query = search.stringValue.trimmingCharacters(in:.whitespacesAndNewlines)
-        filtered = book?.chapters.indices.filter { query.isEmpty || book!.chapters[$0].title.localizedCaseInsensitiveContains(query) } ?? []
+        let chapters = book?.chapters ?? []
+        filtered = chapters.indices.filter { query.isEmpty || chapters[$0].title.localizedCaseInsensitiveContains(query) }
         table.reloadData(); selectCurrentRow()
     }
     func selectCurrentRow() {
@@ -250,31 +302,27 @@ import ReaderCore
     }
     @objc func selectChapter() { guard filtered.indices.contains(table.selectedRow) else { return }; openChapter(filtered[table.selectedRow]) }
     @objc func selectBook() {
-        guard state.books.indices.contains(bookPicker.indexOfSelectedItem) else { return }
-        let target = state.books[bookPicker.indexOfSelectedItem]
-        let pos = state.positions[target.id] ?? ReadingPosition()
-        do { try openBook(target,chapter:pos.chapter,character:pos.character) }
-        catch { refreshLibrary(); showError(error) }
+        guard let id = bookPicker.selectedItem?.representedObject as? String,
+              let target = state.books.first(where: { $0.id == id }) else { return }
+        let position = state.positions[target.id] ?? ReadingPosition()
+        openBook(target, chapter: position.chapter, position: position)
     }
-    func openBook(_ target:Book,chapter:Int,character:Int = 0,end:Bool = false) throws {
-        let text = try target.text(at:chapter)
-        commitChapter(book:target,chapter:chapter,text:text,character:character,end:end)
-    }
-    func commitChapter(book target:Book,chapter:Int,text:String,character:Int = 0,end:Bool = false) {
+    func commitChapter(book target:Book,chapter:Int,text:String,character:Int = 0,end:Bool = false,legacyCharacter:Int? = nil,legacyChapter:Int? = nil,migrated:Bool = false,save:Bool = true) {
         recordPosition()
         let changedBook = displayedBookID != target.id
         rendering = true
         state.selectedBook = target.id; displayedBookID = target.id
         currentChapter = chapter; currentText = text.isEmpty ? "本节没有文字内容" : text
-        if changedBook { refreshLibrary() } else { selectCurrentRow() }
+        if changedBook { chapterPicker?.close(); refreshLibrary() } else { selectCurrentRow() }
         render(character:character); if end { active.goToEnd() }
-        rendering = false; recordPosition(); updateProgress(); persist()
-        (isStealth ? mini : window)?.makeFirstResponder(active.text)
+        state.positions[target.id] = ReadingPosition(chapter:chapter,character:active.visibleCharacter(),legacyCharacter:legacyCharacter ?? state.positions[target.id]?.legacyCharacter,legacyChapter:legacyChapter ?? state.positions[target.id]?.legacyChapter)
+        rendering = false; recordPosition(); updateProgress(); if save { persist() }
+        if migrated { subtitleLabel.stringValue = "正文排版已更新 · 已保留章节，从章首继续" }
+        if (isStealth ? mini : window)?.isVisible == true, !active.visuallyHidden, !NSApp.isHidden { (isStealth ? mini : window)?.makeFirstResponder(active.text) }
     }
     func openChapter(_ chapter: Int, character: Int = 0, end: Bool = false) {
-        guard let book, book.chapters.indices.contains(chapter) else { return }
-        do { try openBook(book,chapter:chapter,character:character,end:end) }
-        catch { showError(error) }
+        guard let target = book, target.chapters.indices.contains(chapter) else { return }
+        openBook(target, chapter: chapter, character: character, end: end)
     }
     func render(character: Int) {
         let p = state.preferences
@@ -299,11 +347,12 @@ import ReaderCore
     }
     @objc func showChapterPicker() {
         guard let book, let screen = mini.screen else { return }
-        if chapterPicker == nil {
-            chapterPicker = ChapterPicker()
-            chapterPicker?.onSelect = { [weak self] index in
-                guard let self else { return }; self.openChapter(index); self.mini.makeKeyAndOrderFront(nil)
-            }
+        if chapterPicker == nil { chapterPicker = ChapterPicker() }
+        let presentedBookID = book.id
+        chapterPicker?.onSelect = { [weak self] index in
+            guard let self, self.displayedBookID == presentedBookID,
+                  self.requestedChapter == nil || self.requestedChapter?.book.id == presentedBookID else { return }
+            self.openChapter(index); self.mini.makeKeyAndOrderFront(nil)
         }
         let anchor = hoverToolbar?.panel.isVisible == true ? hoverToolbar!.panel.frame : mini.frame
         chapterPicker?.present(book:book,chapter:currentChapter,near:anchor,screen:screen.visibleFrame)
@@ -329,22 +378,23 @@ import ReaderCore
     }
     @objc func requestScreenPermission() { contrast.requestPermission(); syncContrast() }
     @objc func toggleAdaptive(_ sender:NSButton) {
+        guard state.preferences.adaptiveText != (sender.state == .on) else { return }
         state.preferences.adaptiveText = sender.state == .on
         if !state.preferences.adaptiveText { lastBackgroundSample = nil; miniSurface.applyBackgroundSample(nil); miniSurface.applyAdaptiveColor(nil) }
         syncContrast(); persist()
     }
     @objc func toggleVisualHidden() {
         guard isStealth else { return }
-        recordPosition(); miniSurface.setVisualHidden(!miniSurface.visuallyHidden); if miniSurface.visuallyHidden { visibilityShortcut.cancelPending(); chapterPicker?.close() }; syncContrast(); syncHoverToolbar(); persist()
+        invalidateReadingIntent(); recordPosition(); miniSurface.setVisualHidden(!miniSurface.visuallyHidden); if miniSurface.visuallyHidden { visibilityShortcut.cancelPending(); chapterPicker?.close() }; syncContrast(); syncHoverToolbar(); persist()
     }
     @objc func togglePin() {
         state.preferences.floating.toggle(); mini.level = state.preferences.floating ? .floating : .normal
         syncHoverToolbar()
-        if settings != nil { rebuildSettings() }; persist()
+        refreshVisibleSettings(); persist()
     }
     func recordPosition() {
         guard !rendering, let book, displayedBookID == book.id else { return }
-        state.positions[book.id] = ReadingPosition(chapter:currentChapter,character:active.visibleCharacter())
+        state.positions[book.id] = ReadingPosition(chapter:currentChapter,character:active.visibleCharacter(),legacyCharacter:state.positions[book.id]?.legacyCharacter,legacyChapter:state.positions[book.id]?.legacyChapter)
     }
     func updateProgress() {
         guard let book, displayedBookID == book.id else { return }
@@ -357,14 +407,15 @@ import ReaderCore
     var pModePageLabel: String { state.preferences.readingMode == .paged ? "\(active.pageIndex+1)/\(max(1,active.pageRanges.count)) 页  ·  " : "" }
     @objc func toggleReadingMode() { setReadingMode(state.preferences.readingMode == .paged ? .scrolling : .paged) }
     func setReadingMode(_ mode: ReadingMode) {
+        guard state.preferences.readingMode != mode else { return }
         let character = active.visibleCharacter(); state.preferences.readingMode = mode
         rendering = true; render(character:character); rendering = false
-        recordPosition(); updateProgress(); if settings != nil { rebuildSettings() }; persist()
+        recordPosition(); updateProgress(); refreshVisibleSettings(); persist()
     }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if [#selector(previousPage),#selector(nextPage)].contains(menuItem.action), !menuItem.keyEquivalent.isEmpty { return readerHasKeyboardFocus }
         if [#selector(previousPage),#selector(nextPage),#selector(previousChapter),#selector(nextChapter)].contains(menuItem.action) { return canNavigateReader }
-        if [#selector(importBook),#selector(importFromBooks)].contains(menuItem.action) { return !importing }
+        if [#selector(importBook),#selector(importFromBooks)].contains(menuItem.action) { return !terminating }
         if [#selector(moreTransparent),#selector(lessTransparent)].contains(menuItem.action) { return isStealth }
         return true
     }
@@ -375,32 +426,41 @@ import ReaderCore
     func adjustMini(brightness:Double = 0,transparency:Double = 0) {
         guard isStealth || transparency == 0 else { return }
         let character = active.visibleCharacter()
-        state.preferences.adjustBrightness(by:brightness); state.preferences.adjustTransparency(by:transparency)
-        render(character:character); if settings != nil { rebuildSettings() }; persist()
+        let previous = state.preferences
+        if brightness != 0 { state.preferences.adjustBrightness(by:brightness) }
+        if transparency != 0 { state.preferences.adjustTransparency(by:transparency) }
+        guard state.preferences != previous else { return }
+        render(character:character); refreshVisibleSettings(); scheduleSave()
     }
     func scheduleSave() { saveWork?.cancel(); let work = DispatchWorkItem { [weak self] in self?.persist() }; saveWork = work; DispatchQueue.main.asyncAfter(deadline:.now()+0.35,execute:work) }
-    func persist() { saveWork?.cancel(); guard libraryLoaded else { return }; do { try state.save(to:stateURL) } catch { showError(error) } }
+    func persist() { saveWork?.cancel(); guard libraryLoaded else { return }; persistence.submit(state) }
     func turnPage(_ direction: Int) {
-        guard canNavigateReader, let book else { return }
-        if active.page(direction) {
-            let next = currentChapter+direction
-            if book.chapters.indices.contains(next) { openChapter(next,end:direction < 0) }
+        guard canNavigateReader, let book = requestedChapter?.book ?? book else { return }
+        if requestedChapter != nil || active.page(direction) {
+            let next = (requestedChapter?.chapter ?? currentChapter)+direction
+            if book.chapters.indices.contains(next) { openBook(book,chapter:next,end:direction < 0) }
         }
     }
     @objc func nextPage() { turnPage(1) }
     @objc func previousPage() { turnPage(-1) }
-    @objc func nextChapter() { guard canNavigateReader else { return }; openChapter(currentChapter+1) }
-    @objc func previousChapter() { guard canNavigateReader else { return }; openChapter(currentChapter-1) }
+    @objc func nextChapter() { moveChapter(1) }
+    @objc func previousChapter() { moveChapter(-1) }
+    func moveChapter(_ delta: Int) {
+        guard canNavigateReader, let target = requestedChapter?.book ?? book else { return }
+        let chapter = (requestedChapter?.chapter ?? currentChapter) + delta
+        guard target.chapters.indices.contains(chapter) else { return }
+        openBook(target, chapter: chapter)
+    }
     @objc func focusSearch() { if isStealth { showChapterPicker(); return }; if sidebarWidth?.constant != 0 { toggleSidebar() }; window.makeFirstResponder(search) }
     @objc func toggleStealth() {
         guard book != nil else { importBook(); return }
-        recordPosition(); let character = state.positions[book!.id]?.character ?? 0
+        invalidateReadingIntent(); recordPosition(); let character = state.positions[book!.id]?.character ?? 0
         chapterPicker?.close(); miniSurface.setVisualHidden(false); isStealth.toggle(); UserDefaults.standard.set(isStealth,forKey:"StealthMode"); rendering = true; render(character:character); rendering = false
         if isStealth { window.orderOut(nil); mini.makeKeyAndOrderFront(nil); mini.makeFirstResponder(miniSurface.text) }
         else { mini.orderOut(nil); window.makeKeyAndOrderFront(nil); window.makeFirstResponder(normalSurface.text) }
-        updateProgress(); syncContrast(); syncHoverToolbar(); if settings != nil { rebuildSettings() }; persist(); NSApp.activate(ignoringOtherApps:true)
+        updateProgress(); syncContrast(); syncHoverToolbar(); refreshVisibleSettings(); persist(); NSApp.activate(ignoringOtherApps:true)
     }
-    @objc func hideReader() { visibilityShortcut.cancelPending(); active.locator.cancel(); hoverToolbar?.stop(); miniSurface.interaction.setHoverTracking(false); chapterPicker?.close(); contrast.stop(); recordPosition(); persist(); (isStealth ? mini : window)?.orderOut(nil); settings?.orderOut(nil) }
+    @objc func hideReader() { invalidateReadingIntent(); visibilityShortcut.cancelPending(); active.locator.cancel(); hoverToolbar?.stop(); miniSurface.interaction.setHoverTracking(false); chapterPicker?.close(); contrast.stop(); recordPosition(); persist(); (isStealth ? mini : window)?.orderOut(nil); settings?.orderOut(nil) }
     @objc func closeWindow() { closeReaderWindow(NSApp.keyWindow) }
     func closeReaderWindow(_ keyWindow:NSWindow?) {
         if let settings, keyWindow === settings { settings.performClose(nil); return }
@@ -408,7 +468,8 @@ import ReaderCore
         hideReader()
     }
     @objc func showReader() { revealReader(highlight:true) }
-    func revealReader(highlight:Bool) {
+    func revealReader(highlight:Bool, userInitiated: Bool = true) {
+        if userInitiated { readingIntentGeneration += 1 }
         guard let target = isStealth ? mini : window else { return }
         if !NSScreen.screens.contains(where: { $0.visibleFrame.intersection(target.frame).width > 40 && $0.visibleFrame.intersection(target.frame).height > 30 }) { target.center() }
         active.setVisualHidden(false)
@@ -418,30 +479,18 @@ import ReaderCore
     @objc func larger() { changeFont(1) }
     @objc func smaller() { changeFont(-1) }
     func changeFont(_ delta: Double) {
-        let anchor = active.visibleCharacter()
+        let anchor = active.visibleCharacter(), previous = state.preferences
         if isStealth { state.preferences.stealthFontSize = min(20,max(8,state.preferences.stealthFontSize+delta)) } else { state.preferences.fontSize = min(32,max(14,state.preferences.fontSize+delta)) }
-        render(character:anchor); if settings != nil { rebuildSettings() }; persist()
+        guard state.preferences != previous else { return }
+        render(character:anchor); refreshVisibleSettings(); scheduleSave()
     }
     @objc func importBook() { openImportPanel(directory:nil) }
     @objc func importFromBooks() { openImportPanel(directory:FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/iCloud~com~apple~iBooks/Documents")) }
     func openImportPanel(directory: URL?) {
-        let panel = NSOpenPanel(); panel.title = "导入 EPUB"; panel.allowedContentTypes = [UTType(filenameExtension:"epub") ?? .data]; panel.allowsMultipleSelection = false; panel.canChooseDirectories = true; panel.treatsFilePackagesAsDirectories = false; panel.directoryURL = directory
-        panel.begin { [weak self] response in if response == .OK, let url = panel.url { self?.importURL(url) } }
+        let panel = NSOpenPanel(); panel.title = "导入 EPUB"; panel.allowedContentTypes = [.epub]; panel.allowsMultipleSelection = true; panel.canChooseDirectories = true; panel.treatsFilePackagesAsDirectories = false; panel.directoryURL = directory
+        panel.begin { [weak self] response in if response == .OK { self?.importURLs(panel.urls) } }
     }
-    func importURL(_ url: URL) {
-        guard !importing else { return }; importing = true; subtitleLabel.stringValue = "正在导入…"
-        let library = support.appendingPathComponent("Books")
-        DispatchQueue.global(qos:.userInitiated).async { [weak self] in
-            let result = Result { try EPUB.importBookWithOpeningText(from:url,library:library) }
-            DispatchQueue.main.async {
-                guard let self else { return }; self.importing = false
-                switch result {
-                case .success(let imported): self.state.books.append(imported.book); self.search.stringValue = ""; self.commitChapter(book:imported.book,chapter:0,text:imported.text); self.showReader()
-                case .failure(let error): self.refreshLibrary(); self.showError(error)
-                }
-            }
-        }
-    }
+    func importURL(_ url: URL) { importURLs([url]) }
     var pageColor: NSColor { dark ? NSColor.black : NSColor(white:0.97,alpha:1) }
     func applyAppearance() {
         NSApp.appearance = nil
@@ -460,7 +509,7 @@ import ReaderCore
         settings?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true)
     }
     func rebuildSettings() {
-        guard let panel = settings else { return }; settingsValues.removeAll(); adaptiveStatusLabel = nil; permissionButton = nil
+        guard let panel = settings else { return }; settingsValues.removeAll(); settingsSliders.removeAll(); adaptiveStatusLabel = nil; permissionButton = nil
         let top = panel.frame.maxY, height: CGFloat = settingsSection == 3 ? 475 : (settingsSection == 0 ? 347 : (settingsSection == 1 ? 251 : 293))
         panel.setContentSize(NSSize(width:336,height:height)); panel.setFrameOrigin(NSPoint(x:panel.frame.minX,y:top-panel.frame.height))
         let root = NSView(); root.wantsLayer = true; root.layer?.backgroundColor = ReaderPalette.panel.cgColor; panel.contentView = root
@@ -500,7 +549,7 @@ import ReaderCore
             let row = NSStackView(); row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 8
             let icon = NSImageView(image:NSImage(systemSymbolName:symbol,accessibilityDescription:nil)!); icon.contentTintColor = .secondaryLabelColor; icon.widthAnchor.constraint(equalToConstant:16).isActive = true; icon.heightAnchor.constraint(equalToConstant:16).isActive = true
             let label = NSTextField(labelWithString:name); label.font = .systemFont(ofSize:11); label.textColor = .secondaryLabelColor; label.widthAnchor.constraint(equalToConstant:48).isActive = true
-            let control = NSSlider(value:value,minValue:low,maxValue:high,target:self,action:#selector(sliderChanged(_:))); control.tag = tag; control.controlSize = .small; control.isContinuous = true; control.trackFillColor = ReaderPalette.accent; control.setAccessibilityLabel(name); control.widthAnchor.constraint(equalToConstant:144).isActive = true
+            let control = NSSlider(value:value,minValue:low,maxValue:high,target:self,action:#selector(sliderChanged(_:))); control.tag = tag; settingsSliders[tag] = control; control.controlSize = .small; control.isContinuous = true; control.trackFillColor = ReaderPalette.accent; control.setAccessibilityLabel(name); control.widthAnchor.constraint(equalToConstant:144).isActive = true
             if tag == 2 { control.toolTip = "⌥⌘↑/↓ · App 内亮度，每次 5%" }
             if tag == 3 { control.toolTip = "⌥⌘←/→ · 背景透明度，100% 完全透明" }
             let valueLabel = NSTextField(labelWithString:settingValue(tag,value)); valueLabel.font = .monospacedDigitSystemFont(ofSize:10,weight:.medium); valueLabel.alignment = .right; valueLabel.widthAnchor.constraint(equalToConstant:52).isActive = true; settingsValues[tag] = valueLabel
@@ -544,11 +593,15 @@ import ReaderCore
         if key == "ArrowVisibilityEnabled" { if sender.state == .on { visibilityShortcut.start() } else { visibilityShortcut.stop() } }
         if key == "RevealHighlightEnabled", sender.state == .off { active.locator.cancel() }
     }
-    @objc func settingsSectionChanged(_ sender:NSSegmentedControl) { settingsSection = sender.selectedSegment; rebuildSettings() }
+    @objc func settingsSectionChanged(_ sender:NSSegmentedControl) { guard settingsSection != sender.selectedSegment else { return }; settingsSection = sender.selectedSegment; rebuildSettings() }
     @objc func fontCardChanged(_ sender:NSButton) {
-        let name = ["serif","system","kai","mono"][sender.tag], character = active.visibleCharacter()
+        let names = ["serif","system","kai","mono"]
+        guard names.indices.contains(sender.tag) else { return }
+        let name = names[sender.tag], character = active.visibleCharacter(), previous = state.preferences
         if settingsTab == 1 { state.preferences.stealthFontName = name } else { state.preferences.fontName = name }
-        render(character:character); rebuildSettings(); persist()
+        guard state.preferences != previous else { return }
+        if (settingsTab == 1) == isStealth { render(character:character) }
+        refreshVisibleSettings(); scheduleSave()
     }
     @objc func showThemeMenu(_ sender:NSButton) {
         let menu = NSMenu()
@@ -559,17 +612,22 @@ import ReaderCore
         menu.popUp(positioning:nil,at:NSPoint(x:0,y:sender.bounds.maxY+5),in:sender)
     }
     @objc func selectTheme(_ sender:NSMenuItem) { setTheme(["system","light","dark"][sender.tag]) }
-    func setTheme(_ theme:String) { state.preferences.theme = theme; let character = active.visibleCharacter(); applyAppearance(); render(character:character); rebuildSettings(); persist() }
-    @objc func clearTextPreset() { let character = active.visibleCharacter(); state.preferences.opacity = 0; state.preferences.textOpacity = 1; state.preferences.adaptiveText = true; render(character:character); rebuildSettings(); persist() }
+    func setTheme(_ theme:String) { guard state.preferences.theme != theme else { return }; state.preferences.theme = theme; let character = active.visibleCharacter(); applyAppearance(); render(character:character); refreshVisibleSettings(structureChanged: true); persist() }
+    @objc func clearTextPreset() {
+        let character = active.visibleCharacter(), previous = state.preferences
+        state.preferences.opacity = 0; state.preferences.textOpacity = 1; state.preferences.adaptiveText = true
+        guard state.preferences != previous else { return }
+        if isStealth { render(character:character) }; refreshVisibleSettings(); persist()
+    }
     @objc func themeChanged(_ sender: NSSegmentedControl) { setTheme(["system","light","dark"][sender.selectedSegment]) }
-    @objc func settingsTabChanged(_ sender: NSSegmentedControl) { settingsTab = sender.selectedSegment; rebuildSettings() }
+    @objc func settingsTabChanged(_ sender: NSSegmentedControl) { guard settingsTab != sender.selectedSegment else { return }; settingsTab = sender.selectedSegment; rebuildSettings() }
     func settingValue(_ tag:Int,_ value:Double) -> String {
         if tag == 4 || tag == 5 { return String(format:"%.2f×",value) }
         if tag == 2 || tag == 3 || tag == 9 { return "\(Int((value*100).rounded()))%" }
         return "\(Int(value.rounded())) pt"
     }
     @objc func sliderChanged(_ sender: NSSlider) {
-        let anchor = active.visibleCharacter(), value = sender.doubleValue
+        let anchor = active.visibleCharacter(), value = sender.doubleValue, previous = state.preferences
         switch sender.tag {
         case 0: state.preferences.fontSize = value
         case 1: state.preferences.stealthFontSize = value
@@ -580,12 +638,16 @@ import ReaderCore
         case 6: state.preferences.paragraphSpacing = value
         case 7: state.preferences.stealthParagraphSpacing = value
         case 9: state.preferences.textOpacity = 1-value
-        default: state.preferences.margin = value
+        case 8: state.preferences.margin = value
+        default: return
         }
+        guard state.preferences != previous else { return }
         settingsValues[sender.tag]?.stringValue = settingValue(sender.tag,value)
-        render(character:anchor); recordPosition(); scheduleSave()
+        let affectsActive = sender.tag == 2 || (isStealth ? [1,3,5,7,9].contains(sender.tag) : [0,4,6,8].contains(sender.tag))
+        if affectsActive { render(character:anchor); recordPosition() }
+        scheduleSave()
     }
-    @objc func toggleFloating(_ sender: NSButton) { state.preferences.floating = sender.state == .on; mini.level = state.preferences.floating ? .floating : .normal; syncHoverToolbar(); persist() }
+    @objc func toggleFloating(_ sender: NSButton) { guard state.preferences.floating != (sender.state == .on) else { return }; state.preferences.floating = sender.state == .on; mini.level = state.preferences.floating ? .floating : .normal; syncHoverToolbar(); persist() }
     @objc func about() { NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"moread",.applicationVersion:"1.3",.credits:NSAttributedString(string:"原生本地阅读器\nEPUB · 无框小窗 · 离线阅读")]) }
-    func showError(_ error: Error) { let alert = NSAlert(); alert.messageText = "无法完成操作"; alert.informativeText = error.localizedDescription; alert.addButton(withTitle:"好"); alert.runModal() }
+    func showError(_ error: Error) { if let errorHandler { errorHandler(error); return }; let alert = NSAlert(); alert.messageText = "无法完成操作"; alert.informativeText = error.localizedDescription; alert.addButton(withTitle:"好"); alert.runModal() }
 }

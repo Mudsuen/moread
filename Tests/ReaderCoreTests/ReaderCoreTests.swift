@@ -21,7 +21,7 @@ final class ReaderCoreTests: XCTestCase {
         let text = try book.text(at:0); XCTAssertTrue(text.contains("你好，世界。")); XCTAssertFalse(text.contains("hidden")); XCTAssertFalse(text.contains("not body")); XCTAssertFalse(text.contains("ignored")); XCTAssertEqual(try book.text(at:1),"第二章正文")
     }
     func testPathTraversalAndSymlinkRejected() throws {
-        XCTAssertThrowsError(try EPUB.safeURL("../outside",under:root)); XCTAssertThrowsError(try EPUB.safeURL("%2e%2e/outside",under:root)); XCTAssertThrowsError(try EPUB.safeURL("/etc/passwd",under:root))
+        XCTAssertThrowsError(try EPUB.safeURL("../outside",under:root)); XCTAssertThrowsError(try EPUB.relativePath(for:"%2e%2e/outside",from:root,under:root)); XCTAssertThrowsError(try EPUB.safeURL("/etc/passwd",under:root))
         try FileManager.default.createSymbolicLink(at:root.appendingPathComponent("link"),withDestinationURL:URL(fileURLWithPath:"/etc"))
         XCTAssertThrowsError(try EPUB.safeURL("link/passwd",under:root))
     }

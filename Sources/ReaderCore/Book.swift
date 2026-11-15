@@ -1,10 +1,10 @@
 import Foundation
 
-public struct Chapter: Codable, Equatable {
+public struct Chapter: Codable, Equatable, Sendable {
     public let title: String
     public let path: String
 }
-public struct Book: Codable, Identifiable {
+public struct Book: Codable, Identifiable, Equatable, Sendable {
     public var id: String
     public let title: String
     public let author: String
@@ -21,27 +21,47 @@ public enum ReaderError: LocalizedError {
     case invalid(String)
     public var errorDescription: String? { if case let .invalid(s) = self { return s }; return nil }
 }
-private final class XML: NSObject, XMLParserDelegate {
+final class XML: NSObject, XMLParserDelegate {
     var start: ((String, [String:String]) -> Void)?
     var end: ((String) -> Void)?
     var text: ((String) -> Void)?
-    func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String:String]) { start?(name.components(separatedBy: ":").last!, attributes) }
-    func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) { end?(name.components(separatedBy: ":").last!) }
-    func parser(_ parser: XMLParser, foundCharacters string: String) { text?(string) }
-    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) { text?(String(decoding: CDATABlock, as: UTF8.self)) }
+    private func cancelled(_ parser: XMLParser) -> Bool { if Task.isCancelled { parser.abortParsing(); return true }; return false }
+    func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String:String]) { if !cancelled(parser) { start?(name.components(separatedBy: ":").last!, attributes) } }
+    func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) { if !cancelled(parser) { end?(name.components(separatedBy: ":").last!) } }
+    func parser(_ parser: XMLParser, foundCharacters string: String) { if !cancelled(parser) { text?(string) } }
+    // XMLParser supplies CDATA callback bytes as UTF-8, independently of source encoding.
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) { if !cancelled(parser) { text?(String(decoding: CDATABlock, as: UTF8.self)) } }
     func parse(_ data: Data) throws {
+        try Task.checkCancellation()
         let p = XMLParser(data: data); p.delegate = self; p.shouldResolveExternalEntities = false
-        guard p.parse() else { throw ReaderError.invalid("无法解析 EPUB：\(p.parserError?.localizedDescription ?? "XML 格式无效")") }
+        let succeeded = p.parse()
+        try Task.checkCancellation()
+        guard succeeded else { throw ReaderError.invalid("无法解析 EPUB：\(p.parserError?.localizedDescription ?? "XML 格式无效")") }
     }
 }
 public enum EPUB {
     public static func safeURL(_ relative: String, under root: URL) throws -> URL {
-        let decoded = relative.removingPercentEncoding ?? relative
-        guard !decoded.hasPrefix("/"), !decoded.contains("://"), !decoded.contains("\0") else { throw ReaderError.invalid("EPUB 包含不安全的文件路径") }
+        // ZIP entries and persisted Chapter.path are literal filesystem paths.
+        guard !relative.hasPrefix("/"), !relative.contains("://"), !relative.contains("\0") else { throw ReaderError.invalid("EPUB 包含不安全的文件路径") }
         let base = root.resolvingSymlinksInPath().standardizedFileURL
-        let url = base.appendingPathComponent(decoded).resolvingSymlinksInPath().standardizedFileURL
+        let url = base.appendingPathComponent(relative).resolvingSymlinksInPath().standardizedFileURL
         guard url.path.hasPrefix(base.path + "/") else { throw ReaderError.invalid("EPUB 文件路径超出书籍目录") }
         return url
+    }
+    /// Converts an EPUB URL reference to one literal root-relative path. Never decode the result again.
+    public static func relativePath(for reference: String, from base: URL, under root: URL) throws -> String {
+        guard reference.range(of: "%(?![0-9A-Fa-f]{2})", options: .regularExpression) == nil,
+              let components = URLComponents(string: reference), components.scheme == nil, components.host == nil,
+              !reference.hasPrefix("/"),
+              let decoded = String(reference.prefix { $0 != "?" && $0 != "#" }).removingPercentEncoding,
+              !decoded.hasPrefix("/"), !decoded.contains("\0") else { throw ReaderError.invalid("EPUB 章节路径无效") }
+        let canonicalRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        let resolved = base.appendingPathComponent(decoded).resolvingSymlinksInPath().standardizedFileURL
+        let prefix = canonicalRoot.path + "/"
+        guard resolved.path.hasPrefix(prefix) else { throw ReaderError.invalid("EPUB 章节路径无效") }
+        let path = String(resolved.path.dropFirst(prefix.count))
+        _ = try safeURL(path, under: canonicalRoot)
+        return path
     }
     public static func load(directory: URL) throws -> Book {
         let container = try safeURL("META-INF/container.xml", under: directory)
@@ -49,7 +69,7 @@ public enum EPUB {
         let c = XML(); c.start = { n,a in if n == "rootfile", opf.isEmpty { opf = a["full-path"] ?? "" } }
         try c.parse(Data(contentsOf: container))
         guard !opf.isEmpty else { throw ReaderError.invalid("EPUB 缺少书籍目录") }
-        let package = try safeURL(opf, under: directory)
+        let package = try safeURL(relativePath(for: opf, from: directory, under: directory), under: directory)
         let base = package.deletingLastPathComponent()
         var title = "", author = "", field = "", manifest: [String:(String,String,String)] = [:], spine: [String] = [], ncxID = "", coverID = ""
         let p = XML()
@@ -64,13 +84,7 @@ public enum EPUB {
         p.end = { if $0 == field { field = "" } }
         try p.parse(Data(contentsOf: package))
         func relative(_ href: String, from baseURL: URL) throws -> String {
-            let file = href.components(separatedBy: "#")[0]
-            let resolved = baseURL.appendingPathComponent(file.removingPercentEncoding ?? file).standardizedFileURL
-            let prefix = directory.standardizedFileURL.path + "/"
-            guard resolved.path.hasPrefix(prefix) else { throw ReaderError.invalid("EPUB 章节路径无效") }
-            let path = String(resolved.path.dropFirst(prefix.count))
-            _ = try safeURL(path, under: directory)
-            return path
+            try relativePath(for: href, from: baseURL, under: directory)
         }
         var labels: [String:String] = [:]
         if let item = manifest[ncxID] ?? manifest.values.first(where: { $0.1 == "application/x-dtbncx+xml" }) {
@@ -116,29 +130,6 @@ public enum EPUB {
         if let item = manifest[coverID] ?? manifest.values.first(where: { $0.2.contains("cover-image") }) { cover = try relative(item.0, from: base) }
         return Book(id: UUID().uuidString, title: title.trimmingCharacters(in: .whitespacesAndNewlines), author: author.trimmingCharacters(in: .whitespacesAndNewlines), chapters: chapters, directory: directory.path, cover: cover)
     }
-    public static func plainText(_ data: Data) throws -> String {
-        var result = "", depth = 0, bodyDepth = 0, ignoredDepth = 0
-        let blocks: Set<String> = ["p","div","h1","h2","h3","h4","li","blockquote","section","br","tr"]
-        let x = XML()
-        x.start = { n,a in
-            depth += 1
-            if n == "body" { bodyDepth = depth }
-            if ignoredDepth == 0, n == "script" || n == "style" || a["hidden"] != nil || (a["style"] ?? "").replacingOccurrences(of: " ", with: "").contains("display:none") { ignoredDepth = depth }
-            if bodyDepth > 0, ignoredDepth == 0, blocks.contains(n), !result.hasSuffix("\n") { result += "\n" }
-        }
-        x.text = { if bodyDepth > 0, ignoredDepth == 0 { result += $0 } }
-        x.end = { n in
-            if bodyDepth > 0, ignoredDepth == 0, blocks.contains(n), !result.hasSuffix("\n") { result += "\n" }
-            if depth == ignoredDepth { ignoredDepth = 0 }
-            if depth == bodyDepth { bodyDepth = 0 }
-            depth -= 1
-        }
-        // Common XHTML named entities are normalized without resolving remote DTDs.
-        var normalized = String(decoding: data, as: UTF8.self)
-        for (key,value) in ["&nbsp;":"&#160;", "&mdash;":"&#8212;", "&ndash;":"&#8211;", "&hellip;":"&#8230;", "&ldquo;":"&#8220;", "&rdquo;":"&#8221;", "&lsquo;":"&#8216;", "&rsquo;":"&#8217;"] { normalized = normalized.replacingOccurrences(of: key, with: value) }
-        try x.parse(Data(normalized.utf8))
-        return result.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: "\n\n")
-    }
     public static func importBook(from source: URL, library: URL) throws -> Book {
         try importBookWithOpeningText(from:source,library:library).book
     }
@@ -175,14 +166,31 @@ public enum EPUB {
         return String(decoding: data, as: UTF8.self)
     }
 }
-public struct ReadingPosition: Codable, Equatable {
+public struct ReadingPosition: Codable, Equatable, Sendable {
     public var chapter: Int
     public var character: Int
-    public init(chapter: Int = 0, character: Int = 0) { self.chapter = chapter; self.character = character }
-}
-public enum ReadingMode: String, Codable { case paged, scrolling }
+    public var textVersion: Int
+    // Retain an incompatible old offset for recovery; it is never applied to new extraction output.
+    public var legacyCharacter: Int?
+    public var legacyChapter: Int?
+    public init(chapter: Int = 0, character: Int = 0, textVersion: Int = EPUB.textVersion, legacyCharacter: Int? = nil, legacyChapter: Int? = nil) {
+        self.chapter = chapter; self.character = character; self.textVersion = textVersion; self.legacyCharacter = legacyCharacter; self.legacyChapter = legacyChapter
+    }
+    enum CodingKeys: String, CodingKey { case chapter, character, textVersion, legacyCharacter, legacyChapter }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        chapter = try values.decode(Int.self, forKey: .chapter)
+        character = try values.decode(Int.self, forKey: .character)
+        textVersion = try values.decodeIfPresent(Int.self, forKey: .textVersion) ?? 1
+        legacyCharacter = try values.decodeIfPresent(Int.self, forKey: .legacyCharacter)
+        legacyChapter = try values.decodeIfPresent(Int.self, forKey: .legacyChapter)
+    }
+    public var requiresTextMigration: Bool { textVersion != EPUB.textVersion }
 
-public struct ReaderPreferences: Codable {
+}
+public enum ReadingMode: String, Codable, Sendable { case paged, scrolling }
+
+public struct ReaderPreferences: Codable, Equatable, Sendable {
     public var readingMode: ReadingMode = .paged
     public var fontSize: Double = 20
     public var stealthFontSize: Double = 11
@@ -228,7 +236,7 @@ extension ReaderPreferences {
     public mutating func adjustBrightness(by delta:Double) { brightness = min(1,max(0,(brightness+delta)*100).rounded()/100) }
     public mutating func adjustTransparency(by delta:Double) { opacity = min(1,max(0,((opacity-delta)*100).rounded()/100)) }
 }
-public struct LibraryState: Codable {
+public struct LibraryState: Codable, Equatable, Sendable {
     public var books: [Book] = []
     public var positions: [String:ReadingPosition] = [:]
     public var selectedBook: String?

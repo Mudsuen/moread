@@ -29,7 +29,7 @@ final class ReaderWorkflowTests: XCTestCase {
         }
     }
 
-    @MainActor func testSuccessfulLoadAndFailedBookSwitchPreserveCommittedSession() throws {
+    @MainActor func testSuccessfulLoadAndFailedBookSwitchPreserveCommittedSession() async throws {
         _ = NSApplication.shared
         let app = ReaderApp(support:root.appendingPathComponent("library"))
         try app.loadLibrary()
@@ -40,16 +40,19 @@ final class ReaderWorkflowTests: XCTestCase {
         defer { app.window.close(); app.mini.close() }
         let a = try makeBook(name:"A",chapters:10), b = try makeBook(name:"B",chapters:2)
         app.state.books = [a,b]
-        try app.openBook(a,chapter:9)
+        var errors: [Error] = []; app.errorHandler = { errors.append($0) }
+        app.openBook(a,chapter:9); await app.waitForChapterLoad()
         let text = app.currentText, position = app.state.positions[a.id]
         try FileManager.default.removeItem(at:URL(fileURLWithPath:b.directory).appendingPathComponent("chapter0.xhtml"))
-        XCTAssertThrowsError(try app.openBook(b,chapter:0))
+        app.openBook(b,chapter:0); await app.waitForChapterLoad()
+        XCTAssertEqual(errors.count,1)
         XCTAssertEqual(app.state.selectedBook,a.id)
         XCTAssertEqual(app.displayedBookID,a.id)
         XCTAssertEqual(app.currentChapter,9)
         XCTAssertEqual(app.currentText,text)
         XCTAssertEqual(app.titleLabel.stringValue,"A")
         app.updateProgress(); app.windowDidResignKey(Notification(name:NSWindow.didResignKeyNotification))
+        try await app.persistence.flush(app.state).get()
         let saved = try LibraryState.load(from:app.stateURL)
         XCTAssertEqual(saved.selectedBook,a.id)
         XCTAssertEqual(saved.positions[a.id],position)
